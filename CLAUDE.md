@@ -47,7 +47,8 @@ npm run tauri build               # 설치 파일(NSIS) → target/release/bundl
 FFI 테스트(`crates/measure/tests/stub_engine.rs`)는 `tms_measure_stub.dll`을 `target/debug`와 `target/debug/deps`에서 찾는다.
 - `cargo test --workspace`가 스텁 DLL도 같이 빌드한다(Windows에서는 `deps`에만 생긴다).
 - 다른 DLL을 시험하려면 `TMS_ENGINE_DLL` 환경 변수에 경로를 준다.
-- DLL이 없으면 테스트는 건너뛴다. `TMS_REQUIRE_ENGINE_DLL=1`이면 건너뛰지 않고 실패한다(CI는 이렇게 돌린다).
+- 엔진 DLL은 경우에 따라 없을 수 있다. DLL이 없으면 FFI 테스트는 실패하지 않고 건너뛴다(CI도 같음).
+  `-- --nocapture`로 돌리면 찾은 DLL 경로나 건너뛴 이유가 출력된다.
 
 ## 버전과 릴리스
 
@@ -142,6 +143,8 @@ FFI 테스트(`crates/measure/tests/stub_engine.rs`)는 `tms_measure_stub.dll`�
   - 엔진의 글자 폭·줄바꿈 코드를 PC용 DLL로 빌드하고 `tms_measure.h`를 구현해 받는다.
   - 렌더 프로필(`render_profile`)은 엔진 버전, 크기, 자간, 줄 높이, 줄바꿈 방식, 언어별 폰트 폴백 순서를 가진다.
   - 엔진 버전별 DLL을 보관하고(`measure_engine`), 결과에 엔진 버전을 기록한다.
+  - 엔진 DLL은 경우에 따라 없을 수 있다. DLL이 없어도 편집과 텍스트 검증은 동작해야 한다.
+    렌더 검증기는 `RenderCtx` 없이 호출되면 `ValidateError::NeedsRender`를 돌려준다(죽지 않음).
   - 폰트 파일은 DB에 BLOB으로 넣는다(`font_asset`, sha256 중복 방지).
 - **UI 규칙**: 행 = 토큰, 열 = 언어인 엑셀형 표는 화면용 뷰일 뿐이다. 저장은 토큰 × 언어 단위 행이다.
 
