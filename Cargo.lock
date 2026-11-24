@@ -2200,7 +2200,7 @@ dependencies = [
 
 [[package]]
 name = "lingua-tms"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -4203,7 +4203,7 @@ checksum = "fd3ca314f692efd6c868f8408f53fe444634a845f96c028b97d35f6a1f79f0ee"
 
 [[package]]
 name = "tms-core"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "calamine",
  "regex",
@@ -4219,11 +4219,11 @@ dependencies = [
 
 [[package]]
 name = "tms-engine-stub"
-version = "0.0.1"
+version = "0.1.0"
 
 [[package]]
 name = "tms-measure"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "libloading 0.8.9",
  "serde",

@@ -76,7 +76,7 @@ FFI 테스트(`crates/measure/tests/stub_engine.rs`)는 `tms_measure_stub.dll`�
 
 ## 현재 상태 (2026-11-25)
 
-- 마지막 릴리스 0.0.1. 그 뒤 main 에 작업 2~6(아래 "다음 작업")이 들어갔고 아직 릴리스하지 않았다.
+- 마지막 릴리스 0.1.0(작업 2~6 포함). 0.0.1 은 작업 1(빌드·CI 구성)만 있다.
 - Windows 11에서 확인한 것:
   - `cargo test --workspace` 통과(core 33, engine-stub 2, 스텁 DLL FFI 1), clippy(`-D warnings`) 경고 없음, `npm run build` 성공
   - `npm run tauri dev`로 각 탭을 직접 눌러 확인: 표 편집·붙여넣기, 엑셀 가져오기(이전 토큰명 매칭),
