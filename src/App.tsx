@@ -3,13 +3,17 @@ import { useCallback, useEffect, useState } from "react";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { api, type ProjectInfo } from "./api";
 import StringsView from "./views/StringsView";
+import ImportView from "./views/ImportView";
 
 const FILTERS = [{ name: "TMS 프로젝트", extensions: ["tms"] }];
 
 /** 비동기 작업을 실행하고 오류를 화면 위쪽 띠에 보여 준다. */
 export type RunFn = (f: () => Promise<unknown>) => Promise<void>;
 
-const TABS = [{ id: "strings", label: "문구" }] as const;
+const TABS = [
+  { id: "strings", label: "문구" },
+  { id: "import", label: "가져오기" },
+] as const;
 type TabId = (typeof TABS)[number]["id"];
 
 export default function App() {
@@ -70,6 +74,7 @@ export default function App() {
       {project && (
         <main className="view" key={epoch}>
           {tab === "strings" && <StringsView run={run} />}
+          {tab === "import" && <ImportView run={run} />}
         </main>
       )}
     </div>

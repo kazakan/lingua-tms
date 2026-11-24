@@ -157,10 +157,10 @@ FFI 테스트(`crates/measure/tests/stub_engine.rs`)는 `tms_measure_stub.dll`�
 2. ~~**표 교체**~~ 완료: Glide Data Grid(`6.0.4-alpha24` 고정, React 19 지원판은 베타뿐)
    - 가상 스크롤, 복사·붙여넣기, 검색·필터(미번역, 원문 변경됨; 검증 실패는 작업 5에서)
    - 편집·붙여넣기·지우기는 `set_cells` → `history::apply_edits` 로 changeset 하나. 값이 같은 셀은 건너뜀
-3. **엑셀 가져오기(calamine)**
-   - 열 매핑 화면: 토큰명 열과 언어 열을 지정한다.
-   - 적용 전에 diff 미리보기를 보여 주고, 적용은 `ChangesetKind::Import` 하나로 한다.
-   - 토큰명은 이전 이름까지 찾는다.
+3. ~~**엑셀 가져오기(calamine)**~~ 완료
+   - `sheet.rs`(읽기·열 매핑) → `values::ValueTable` → `import.rs`(계획·적용)
+   - 토큰 생성과 값 변경이 Import 변경 묶음 하나. 빈 칸은 기본으로 건너뜀(옵션으로 지우기)
+   - 토큰명은 이전 이름까지 찾고, 이전 이름으로 찾은 행은 미리보기에 표시
 4. **내보내기와 포맷 어댑터**
    - `export_target` 설정 화면
    - `token_external_key` 고정 저장, 새 토큰의 키 제안

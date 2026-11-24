@@ -60,6 +60,66 @@ export interface RevRow {
   created_at: string;
 }
 
+// ── 가져오기 ─────────────────────────────
+
+export interface SheetPreview {
+  name: string;
+  rows: number;
+  cols: number;
+  /** 앞쪽 30행. 열 번호는 엑셀과 같다(A = 0). */
+  head: string[][];
+}
+
+export interface LocaleColumn {
+  col: number;
+  locale: string;
+}
+
+export interface ColumnMapping {
+  sheet: string;
+  /** 0부터. 데이터는 그다음 행부터 */
+  header_row: number;
+  key_col: number;
+  locale_cols: LocaleColumn[];
+}
+
+export type ImportSource =
+  | { kind: "mapped"; path: string; mapping: ColumnMapping }
+  | { kind: "target"; path: string; target_id: string };
+
+export interface ImportOptions {
+  create_missing_tokens: boolean;
+  clear_empty: boolean;
+}
+
+export interface PlannedChange {
+  token_id: string | null;
+  token_key: string;
+  locale: string;
+  old: string | null;
+  new: string | null;
+}
+
+export interface ImportPlan {
+  changes: PlannedChange[];
+  new_tokens: string[];
+  renamed: { sheet_key: string; current_key: string }[];
+  skipped_tokens: string[];
+  conflicting_keys: string[];
+  unknown_locales: string[];
+  duplicate_keys: string[];
+  unchanged: number;
+  rows: number;
+}
+
+export interface ImportResult {
+  changeset_id: number | null;
+  created_tokens: number;
+  changed_cells: number;
+}
+
+// ── 검증 ─────────────────────────────────
+
 export interface ValidatorInfo {
   id: string;
   description: string;
@@ -73,6 +133,8 @@ export const api = {
   loadGrid: () => invoke<Grid>("load_grid"),
   addLocale: (code: string, name: string, isSource: boolean) =>
     invoke<void>("add_locale", { code, name, isSource }),
+  listLocales: () => invoke<Locale[]>("list_locales"),
+  listTokens: () => invoke<Token[]>("list_tokens"),
   createToken: (key: string, description?: string) =>
     invoke<string>("create_token", { key, description: description ?? null }),
   renameToken: (tokenId: string, newKey: string) =>
@@ -81,5 +143,10 @@ export const api = {
   setCells: (edits: CellEdit[]) => invoke<number | null>("set_cells", { edits }),
   cellHistory: (tokenId: string, locale: string) =>
     invoke<RevRow[]>("cell_history", { tokenId, locale }),
+  workbookPreview: (path: string) => invoke<SheetPreview[]>("workbook_preview", { path }),
+  planImport: (source: ImportSource, options: ImportOptions) =>
+    invoke<ImportPlan>("plan_import", { source, options }),
+  applyImport: (source: ImportSource, options: ImportOptions) =>
+    invoke<ImportResult>("apply_import", { source, options }),
   listValidators: () => invoke<ValidatorInfo[]>("list_validators"),
 };

@@ -3,7 +3,7 @@
 //! 토큰 id 는 바뀌지 않고 key(토큰명)는 바뀔 수 있다. 이전 이름은 `token_key_history`에 남고
 //! 다른 토큰이 재사용할 수 없다.
 
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{params, Connection, OptionalExtension, Transaction};
 use serde::Serialize;
 use serde_json::json;
 
@@ -76,6 +76,22 @@ pub fn create_token(conn: &mut Connection, author: &str, key: &str, description:
     let tx = conn.transaction()?;
     let meta = ChangesetMeta::new(author, ChangesetKind::Admin).with_message(format!("create token {key}"));
     let changeset_id = insert_changeset(&tx, &meta)?;
+    let id = create_token_in(&tx, changeset_id, key, description)?;
+    tx.commit()?;
+    Ok(id)
+}
+
+/// 이미 만든 변경 묶음 안에서 토큰을 만든다(엑셀 가져오기처럼 한 동작이 한 묶음일 때).
+pub(crate) fn create_token_in(
+    tx: &Transaction,
+    changeset_id: i64,
+    key: &str,
+    description: Option<&str>,
+) -> Result<String> {
+    let key = key.trim();
+    if key.is_empty() {
+        return Err(Error::Invalid("토큰명이 비어 있음".into()));
+    }
     let id = new_id();
     tx.execute(
         "INSERT INTO token (id, key, description) VALUES (?1, ?2, ?3)",
@@ -86,8 +102,14 @@ pub fn create_token(conn: &mut Connection, author: &str, key: &str, description:
          VALUES (?1, 'token', ?2, 'insert', ?3)",
         params![changeset_id, id, json!({ "key": key, "description": description }).to_string()],
     )?;
-    tx.commit()?;
     Ok(id)
+}
+
+/// 토큰 id → 현재 토큰명.
+pub fn token_key(conn: &Connection, token_id: &str) -> Result<String> {
+    conn.query_row("SELECT key FROM token WHERE id = ?1", [token_id], |r| r.get(0))
+        .optional()?
+        .ok_or_else(|| Error::NotFound(format!("토큰 {token_id}")))
 }
 
 /// 토큰명 바꾸기. 이전 이름은 이력에 남고 다른 토큰이 재사용할 수 없다.

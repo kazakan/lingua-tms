@@ -1,16 +1,17 @@
 //! Tauri 명령. 얇게 유지한다: 인자 받고 → tms-core 호출 → 결과를 JSON 으로.
 //! 로직이 생기면 tms-core 로 옮기고 거기서 테스트한다.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use serde::Serialize;
 use serde_json::Value;
 use tauri::{Manager, State};
+use tms_core::import::{ImportOptions, ImportPlan, ImportResult, ImportSource};
 use tms_core::model::{CellEdit, CellKey, ChangesetKind, ChangesetMeta, RevRow};
 use tms_core::rusqlite::Connection;
 use tms_core::validate::Registry;
-use tms_core::{db, grid, history, tokens};
+use tms_core::{db, grid, history, import, sheet, tokens};
 
 struct Project {
     path: PathBuf,
@@ -79,6 +80,16 @@ fn add_locale(state: State<'_, AppState>, code: String, name: String, is_source:
 }
 
 #[tauri::command]
+fn list_locales(state: State<'_, AppState>) -> CmdResult<Vec<tokens::Locale>> {
+    with_project(&state, |conn| tokens::list_locales(conn))
+}
+
+#[tauri::command]
+fn list_tokens(state: State<'_, AppState>) -> CmdResult<Vec<tokens::Token>> {
+    with_project(&state, |conn| tokens::list_tokens(conn))
+}
+
+#[tauri::command]
 fn create_token(state: State<'_, AppState>, key: String, description: Option<String>) -> CmdResult<String> {
     let author = state.author.clone();
     with_project(&state, |conn| tokens::create_token(conn, &author, &key, description.as_deref()))
@@ -100,6 +111,31 @@ fn set_cells(state: State<'_, AppState>, edits: Vec<CellEdit>) -> CmdResult<Opti
 #[tauri::command]
 fn cell_history(state: State<'_, AppState>, token_id: String, locale: String) -> CmdResult<Vec<RevRow>> {
     with_project(&state, |conn| history::cell_history(conn, &CellKey::new(token_id, locale)))
+}
+
+/// 엑셀·ODS 파일의 시트 목록과 앞쪽 행(열 매핑 화면용).
+#[tauri::command]
+fn workbook_preview(path: String) -> CmdResult<Vec<sheet::SheetPreview>> {
+    sheet::workbook_preview(Path::new(&path), 30).map_err(err)
+}
+
+/// 가져오기 미리보기. DB는 바꾸지 않는다.
+#[tauri::command]
+fn plan_import(state: State<'_, AppState>, source: ImportSource, options: ImportOptions) -> CmdResult<ImportPlan> {
+    with_project(&state, |conn| {
+        let table = source.load(conn)?;
+        import::plan_import(conn, &table, &options)
+    })
+}
+
+/// 가져오기 적용(변경 묶음 하나).
+#[tauri::command]
+fn apply_import(state: State<'_, AppState>, source: ImportSource, options: ImportOptions) -> CmdResult<ImportResult> {
+    let author = state.author.clone();
+    with_project(&state, |conn| {
+        let table = source.load(conn)?;
+        import::apply_import(conn, &author, &table, &options, &source.label())
+    })
 }
 
 #[derive(Serialize)]
@@ -152,10 +188,15 @@ pub fn run() {
             project_info,
             load_grid,
             add_locale,
+            list_locales,
+            list_tokens,
             create_token,
             rename_token,
             set_cells,
             cell_history,
+            workbook_preview,
+            plan_import,
+            apply_import,
             list_validators,
         ])
         .run(tauri::generate_context!())
