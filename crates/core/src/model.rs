@@ -40,6 +40,14 @@ pub struct CellChange {
     pub new: Option<CellValue>,
 }
 
+/// 화면에서 셀 하나를 고친 값. 빈 문자열은 미번역으로 되돌린다는 뜻이다.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CellEdit {
+    pub token_id: String,
+    pub locale: String,
+    pub value: String,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ChangesetKind {

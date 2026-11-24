@@ -14,5 +14,7 @@ export default defineConfig({
   },
   build: {
     target: "es2022",
+    // 데스크톱 앱이라 번들은 로컬 디스크에서 읽는다. 큰 청크 경고(500kB)는 의미가 없어 올려 둔다.
+    chunkSizeWarningLimit: 3000,
   },
 });

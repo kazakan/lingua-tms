@@ -7,7 +7,7 @@ use std::sync::Mutex;
 use serde::Serialize;
 use serde_json::Value;
 use tauri::{Manager, State};
-use tms_core::model::{CellChange, CellKey, CellValue, ChangesetKind, ChangesetMeta, RevRow};
+use tms_core::model::{CellEdit, CellKey, ChangesetKind, ChangesetMeta, RevRow};
 use tms_core::rusqlite::Connection;
 use tms_core::validate::Registry;
 use tms_core::{db, grid, history, tokens};
@@ -90,15 +90,11 @@ fn rename_token(state: State<'_, AppState>, token_id: String, new_key: String) -
     with_project(&state, |conn| tokens::rename_token(conn, &author, &token_id, &new_key))
 }
 
-/// 셀 하나 편집. 빈 문자열이면 미번역으로 되돌린다. 바뀐 게 없으면 None.
+/// 셀 편집(하나 또는 여러 셀 붙여넣기)을 변경 묶음 하나로 쓴다. 빈 문자열은 미번역. 바뀐 게 없으면 None.
 #[tauri::command]
-fn set_cell(state: State<'_, AppState>, token_id: String, locale: String, value: String) -> CmdResult<Option<i64>> {
+fn set_cells(state: State<'_, AppState>, edits: Vec<CellEdit>) -> CmdResult<Option<i64>> {
     let meta = ChangesetMeta::new(state.author.clone(), ChangesetKind::Edit);
-    let change = CellChange {
-        key: CellKey::new(token_id, locale),
-        new: (!value.is_empty()).then(|| CellValue::translated(value)),
-    };
-    with_project(&state, |conn| history::apply(conn, &meta, &[change]))
+    with_project(&state, |conn| history::apply_edits(conn, &meta, &edits))
 }
 
 #[tauri::command]
@@ -158,7 +154,7 @@ pub fn run() {
             add_locale,
             create_token,
             rename_token,
-            set_cell,
+            set_cells,
             cell_history,
             list_validators,
         ])

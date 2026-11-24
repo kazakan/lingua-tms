@@ -39,6 +39,13 @@ export interface Grid {
   rows: GridRow[];
 }
 
+/** 중첩 객체의 필드는 Tauri가 변환하지 않으므로 Rust와 같은 snake_case로 쓴다. */
+export interface CellEdit {
+  token_id: string;
+  locale: string;
+  value: string;
+}
+
 export interface CellValue {
   value: string;
   status: string;
@@ -70,9 +77,8 @@ export const api = {
     invoke<string>("create_token", { key, description: description ?? null }),
   renameToken: (tokenId: string, newKey: string) =>
     invoke<number | null>("rename_token", { tokenId, newKey }),
-  /** 빈 문자열이면 미번역으로 되돌린다. 바뀐 게 없으면 null. */
-  setCell: (tokenId: string, locale: string, value: string) =>
-    invoke<number | null>("set_cell", { tokenId, locale, value }),
+  /** 여러 셀을 변경 묶음 하나로 쓴다. 빈 문자열은 미번역, 값이 같은 셀은 건너뜀. 바뀐 게 없으면 null. */
+  setCells: (edits: CellEdit[]) => invoke<number | null>("set_cells", { edits }),
   cellHistory: (tokenId: string, locale: string) =>
     invoke<RevRow[]>("cell_history", { tokenId, locale }),
   listValidators: () => invoke<ValidatorInfo[]>("list_validators"),

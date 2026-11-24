@@ -77,8 +77,8 @@ FFI 테스트(`crates/measure/tests/stub_engine.rs`)는 `tms_measure_stub.dll`�
 - git 저장소와 GitHub(public), CI·릴리스 워크플로가 있다(위 "버전과 릴리스").
 - 화면은 뼈대 수준이다.
   - 프로젝트 새로 만들기·열기(.tms 파일), 언어 추가, 토큰 추가, 토큰명 변경
-  - 셀 편집(포커스가 빠질 때 저장, Enter 저장, Esc 취소, Shift+Enter 줄바꿈)
-  - 원문이 더 최근에 바뀐 셀 노란색 표시, 선택한 셀의 이력 보기
+  - 문구 표(Glide): 셀 편집, 여러 셀 복사·붙여넣기, Delete 로 지우기, 검색·필터
+  - 원문이 더 최근에 바뀐 셀 노란색, 미번역 회색, 선택한 셀의 이력 보기
 - 검증기는 코어에 구현·테스트만 되어 있고 화면과 연결되지 않았다. `list_validators` 명령만 있다.
 
 ## 지켜야 할 규칙
@@ -116,7 +116,7 @@ FFI 테스트(`crates/measure/tests/stub_engine.rs`)는 `tms_measure_stub.dll`�
   - 프로젝트 하나 = SQLite 파일 하나(.tms).
   - 동시 편집, 계정, 외부 API는 이후 단계다.
 - **스택**:
-  - Rust + Tauri 2, 화면은 React. 표는 Glide Data Grid로 바꿀 예정.
+  - Rust + Tauri 2, 화면은 React. 문구 표는 Glide Data Grid.
   - 저장은 rusqlite(bundled), 토큰 id는 UUIDv7.
   - 엑셀은 calamine(읽기)과 rust_xlsxwriter(쓰기).
 - **규모**: 토큰 약 1,600개, 언어 7개(셀 약 1만 1천), 연간 10~20개 증가. 언어 하나가 통으로 추가될 수 있다.
@@ -154,9 +154,9 @@ FFI 테스트(`crates/measure/tests/stub_engine.rs`)는 `tms_measure_stub.dll`�
 ## 다음 작업 (순서대로)
 
 1. ~~**Windows에서 확인**~~ 완료(0.0.1). 테스트·앱 실행 확인, git·GitHub·CI·릴리스 구성
-2. **표 교체**: Glide Data Grid로 바꾼다.
-   - 가상 스크롤, 복사·붙여넣기, 검색·필터(미번역, outdated, 검증 실패)
-   - 붙여넣기 여러 셀은 changeset 하나로 처리한다.
+2. ~~**표 교체**~~ 완료: Glide Data Grid(`6.0.4-alpha24` 고정, React 19 지원판은 베타뿐)
+   - 가상 스크롤, 복사·붙여넣기, 검색·필터(미번역, 원문 변경됨; 검증 실패는 작업 5에서)
+   - 편집·붙여넣기·지우기는 `set_cells` → `history::apply_edits` 로 changeset 하나. 값이 같은 셀은 건너뜀
 3. **엑셀 가져오기(calamine)**
    - 열 매핑 화면: 토큰명 열과 언어 열을 지정한다.
    - 적용 전에 diff 미리보기를 보여 주고, 적용은 `ChangesetKind::Import` 하나로 한다.
@@ -169,11 +169,14 @@ FFI 테스트(`crates/measure/tests/stub_engine.rs`)는 `tms_measure_stub.dll`�
    - `constraint_def` 추가·수정·삭제(`entity_rev` 기록)
    - 입력 폼은 `params_schema`로 react-jsonschema-form이 만든다.
    - 전체 검증 실행 명령과 셀별 결과 표시
-6. **렌더 연결**
+6. **이력 화면**: 릴리스 만들기, 두 시점 diff, 되돌리기·롤백, 두 엑셀 파일 비교
+
+**후순위** (2026-11-25 결정: 렌더 연결은 위 작업을 마친 뒤에 한다)
+
+7. **렌더 연결**
    - `font_asset` 등록, `render_profile` 편집, `measure_engine`(DLL 경로)
    - 렌더 검증기를 `EngineDll`에 연결하고, 편집 중 폭·줄 수를 실시간으로 표시한다.
-7. **실제 엔진 DLL** 받기, 골든 세트로 PC 결과와 기기 결과 일치 확인
-8. **이력 화면**: 릴리스 만들기, 두 시점 diff, 되돌리기·롤백, 두 엑셀 파일 비교
+8. **실제 엔진 DLL** 받기, 골든 세트로 PC 결과와 기기 결과 일치 확인
 
 ## 미결 사항 (사용자·엔진 팀 확인 필요)
 

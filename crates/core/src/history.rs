@@ -10,7 +10,7 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
 use serde::Serialize;
 
-use crate::model::{CellChange, CellDiff, CellKey, CellValue, ChangesetKind, ChangesetMeta, RevRow};
+use crate::model::{CellChange, CellDiff, CellEdit, CellKey, CellValue, ChangesetKind, ChangesetMeta, RevRow};
 use crate::{Error, Result};
 
 pub(crate) fn insert_changeset(tx: &Transaction, meta: &ChangesetMeta) -> Result<i64> {
@@ -48,6 +48,39 @@ pub fn read_cell(conn: &Connection, key: &CellKey) -> Result<Option<CellValue>> 
 ///
 /// 실제로 바뀐 셀이 없으면 변경 묶음을 만들지 않고 `None`을 돌려준다.
 pub fn apply(conn: &mut Connection, meta: &ChangesetMeta, changes: &[CellChange]) -> Result<Option<i64>> {
+    let tx = conn.transaction()?;
+    let changeset_id = insert_changeset(&tx, meta)?;
+    let written = write_changes_in(&tx, changeset_id, changes)?; // 오류면 tx 가 drop 되면서 롤백
+    if written == 0 {
+        return Ok(None); // tx 가 drop 되면서 롤백된다
+    }
+    tx.commit()?;
+    Ok(Some(changeset_id))
+}
+
+/// 화면 편집(셀 하나 또는 여러 셀 붙여넣기)을 변경 묶음 하나로 쓴다.
+///
+/// 값이 지금과 같은 셀은 건너뛴다. 그래서 같은 값을 다시 붙여넣어도 상태(승인 등)가 풀리지 않는다.
+/// 값이 바뀐 셀은 상태가 `translated`가 된다. 빈 문자열은 미번역으로 되돌린다.
+pub fn apply_edits(conn: &mut Connection, meta: &ChangesetMeta, edits: &[CellEdit]) -> Result<Option<i64>> {
+    let mut changes = Vec::with_capacity(edits.len());
+    for e in edits {
+        let key = CellKey::new(&e.token_id, &e.locale);
+        let old = read_cell(conn, &key)?;
+        let new = (!e.value.is_empty()).then(|| CellValue::translated(&e.value));
+        if old.as_ref().map(|c| c.value.as_str()) == new.as_ref().map(|c| c.value.as_str()) {
+            continue;
+        }
+        changes.push(CellChange { key, new });
+    }
+    if changes.is_empty() {
+        return Ok(None);
+    }
+    apply(conn, meta, &changes)
+}
+
+/// 이미 연 트랜잭션 안에서 변경 묶음 `changeset_id`에 셀 변경을 쓴다(가져오기처럼 토큰 생성과 한 묶음일 때).
+pub(crate) fn write_changes_in(tx: &Transaction, changeset_id: i64, changes: &[CellChange]) -> Result<usize> {
     let mut seen = HashSet::new();
     for change in changes {
         if !seen.insert(&change.key) {
@@ -57,15 +90,7 @@ pub fn apply(conn: &mut Connection, meta: &ChangesetMeta, changes: &[CellChange]
             )));
         }
     }
-
-    let tx = conn.transaction()?;
-    let changeset_id = insert_changeset(&tx, meta)?;
-    let written = write_changes(&tx, changeset_id, changes)?;
-    if written == 0 {
-        return Ok(None); // tx 가 drop 되면서 롤백된다
-    }
-    tx.commit()?;
-    Ok(Some(changeset_id))
+    write_changes(tx, changeset_id, changes)
 }
 
 fn write_changes(tx: &Transaction, changeset_id: i64, changes: &[CellChange]) -> Result<usize> {
@@ -430,6 +455,47 @@ mod tests {
         assert!(d.iter().all(|x| x.old.is_none()));
         // 거꾸로 비교하면 old/new 가 뒤집힌다
         assert!(diff(&conn, c1, 0).unwrap().iter().all(|x| x.new.is_none()));
+    }
+
+    #[test]
+    fn pasted_edits_are_one_changeset_and_keep_status_of_unchanged_cells() {
+        let (mut conn, a, b) = setup();
+        let a_ko = CellKey::new(&a, "ko-KR");
+        let approved = CellValue {
+            value: "확인".into(),
+            status: "approved".into(),
+        };
+        apply(
+            &mut conn,
+            &meta(ChangesetKind::Edit),
+            &[CellChange {
+                key: a_ko.clone(),
+                new: Some(approved.clone()),
+            }],
+        )
+        .unwrap();
+
+        let edit = |t: &str, l: &str, v: &str| CellEdit {
+            token_id: t.into(),
+            locale: l.into(),
+            value: v.into(),
+        };
+        // 같은 값(a_ko)은 건너뛰고, 나머지 두 셀만 변경 묶음 하나로
+        let cs = apply_edits(
+            &mut conn,
+            &meta(ChangesetKind::Edit),
+            &[edit(&a, "ko-KR", "확인"), edit(&a, "en-US", "OK"), edit(&b, "ko-KR", "취소")],
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(read_cell(&conn, &a_ko).unwrap(), Some(approved));
+        assert_eq!(diff(&conn, cs - 1, cs).unwrap().len(), 2);
+
+        // 빈 문자열은 미번역으로 되돌린다
+        apply_edits(&mut conn, &meta(ChangesetKind::Edit), &[edit(&b, "ko-KR", "")]).unwrap();
+        assert_eq!(read_cell(&conn, &CellKey::new(&b, "ko-KR")).unwrap(), None);
+        // 바뀐 게 없으면 변경 묶음을 만들지 않는다
+        assert_eq!(apply_edits(&mut conn, &meta(ChangesetKind::Edit), &[edit(&b, "ko-KR", "")]).unwrap(), None);
     }
 
     #[test]
