@@ -45,6 +45,10 @@ jobs:
         run: npm ci
 
       # CI를 거치지 않은 커밋에 태그가 붙을 수 있으므로 릴리스 전에 한 번 더 돌린다.
+      # 스텁 DLL 빌드는 ci.yml 과 같은 이유(FFI 테스트가 DLL을 찾게).
+      - name: Build stub engine DLL
+        run: cargo build -p tms-engine-stub
+
       - name: Test
         run: cargo test --workspace
 

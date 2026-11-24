@@ -45,7 +45,10 @@ npm run tauri build               # 설치 파일(NSIS) → target/release/bundl
 ```
 
 FFI 테스트(`crates/measure/tests/stub_engine.rs`)는 `tms_measure_stub.dll`을 `target/debug`와 `target/debug/deps`에서 찾는다.
-- `cargo test --workspace`가 스텁 DLL도 같이 빌드한다(Windows에서는 `deps`에만 생긴다).
+- `cargo test --workspace`도 스텁 DLL을 빌드하지만 위치가 cargo 버전마다 다르다.
+  - 로컬(cargo 1.99)에서는 `deps`에 생긴다.
+  - GitHub 러너의 cargo는 `target/debug/build/…/out` 쪽에 둬서 테스트가 못 찾았다.
+  - 확실히 돌리려면 먼저 `cargo build -p tms-engine-stub`을 실행한다. 이러면 `target/debug`에 생긴다. CI가 이렇게 한다.
 - 다른 DLL을 시험하려면 `TMS_ENGINE_DLL` 환경 변수에 경로를 준다.
 - 엔진 DLL은 경우에 따라 없을 수 있다. DLL이 없으면 FFI 테스트는 실패하지 않고 건너뛴다(CI도 같음).
   `-- --nocapture`로 돌리면 찾은 DLL 경로나 건너뛴 이유가 출력된다.

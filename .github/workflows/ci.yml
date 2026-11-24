@@ -39,7 +39,13 @@ jobs:
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
 
-      # 가짜 엔진 DLL(tms_measure_stub.dll)도 같이 빌드되어 FFI 테스트까지 돈다.
-      # DLL이 없으면 FFI 테스트는 건너뛴다(엔진 DLL은 없을 수 있음).
+      # 가짜 엔진 DLL을 target/debug 에 만들어 FFI 테스트가 실제로 돌게 한다.
+      # cargo test 만으로는 cargo 버전에 따라 DLL이 다른 폴더(build/…/out 등)에 생겨 테스트가 못 찾는다.
+      # DLL이 없으면 FFI 테스트는 실패하지 않고 건너뛴다(엔진 DLL은 없을 수 있음).
+      - name: Build stub engine DLL
+        run: |
+          cargo build -p tms-engine-stub
+          Get-ChildItem target/debug -Filter tms_measure_stub.dll
+
       - name: Test
         run: cargo test --workspace
