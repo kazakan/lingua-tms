@@ -1,0 +1,190 @@
+:root {
+  font-family: "Pretendard", "Malgun Gothic", system-ui, sans-serif;
+  font-size: 14px;
+  color: #1f2937;
+  background: #f8fafc;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+}
+
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+.toolbar,
+.forms {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 8px 12px;
+  border-bottom: 1px solid #e2e8f0;
+  background: #fff;
+}
+
+.forms {
+  gap: 24px;
+}
+
+.forms form {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.path {
+  color: #64748b;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+button {
+  padding: 4px 10px;
+  border: 1px solid #cbd5e1;
+  border-radius: 4px;
+  background: #fff;
+  cursor: pointer;
+}
+
+button:hover {
+  background: #f1f5f9;
+}
+
+input,
+textarea {
+  font: inherit;
+  padding: 3px 6px;
+  border: 1px solid #cbd5e1;
+  border-radius: 4px;
+}
+
+.error {
+  padding: 8px 12px;
+  background: #fef2f2;
+  color: #b91c1c;
+  border-bottom: 1px solid #fecaca;
+  cursor: pointer;
+}
+
+.body {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+}
+
+.table-wrap {
+  flex: 1;
+  overflow: auto;
+}
+
+.empty {
+  flex: 1;
+  padding: 24px;
+  color: #64748b;
+}
+
+table {
+  border-collapse: collapse;
+  width: max-content;
+  min-width: 100%;
+}
+
+th,
+td {
+  border: 1px solid #e2e8f0;
+  padding: 0;
+  vertical-align: top;
+  background: #fff;
+}
+
+th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 6px 8px;
+  background: #f1f5f9;
+  text-align: left;
+  font-weight: 600;
+}
+
+td input,
+td textarea {
+  width: 100%;
+  min-width: 180px;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  resize: vertical;
+}
+
+td input:focus,
+td textarea:focus {
+  outline: 2px solid #2563eb;
+  outline-offset: -2px;
+}
+
+td.missing {
+  background: #fafafa;
+}
+
+td.outdated {
+  background: #fffbeb;
+}
+
+td.selected {
+  box-shadow: inset 0 0 0 1px #2563eb;
+}
+
+.badge {
+  margin-left: 6px;
+  padding: 0 6px;
+  border-radius: 8px;
+  background: #dbeafe;
+  color: #1d4ed8;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.muted {
+  color: #64748b;
+  font-size: 12px;
+  font-weight: normal;
+}
+
+.side {
+  width: 300px;
+  border-left: 1px solid #e2e8f0;
+  background: #fff;
+  padding: 8px 12px;
+  overflow: auto;
+}
+
+.side h3 {
+  margin: 4px 0 8px;
+  font-size: 14px;
+}
+
+.history {
+  padding-left: 18px;
+}
+
+.history li {
+  margin-bottom: 8px;
+}
+
+del {
+  color: #b91c1c;
+}
+
+ins {
+  color: #15803d;
+  text-decoration: none;
+}

@@ -1,0 +1,10 @@
+[package]
+name = "tms-engine-stub"
+description = "개발용 가짜 엔진 측정 DLL. tms_measure.h(ABI 1)를 그대로 구현한다."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "tms_measure_stub"
+crate-type = ["cdylib", "rlib"]

@@ -1,0 +1,16 @@
+[package]
+name = "tms-core"
+description = "TMS 핵심 로직: 저장소(SQLite), 변경 이력, diff, 검증기. 화면과 무관하다."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+tms-measure = { path = "../measure" }
+rusqlite = { version = "0.37", features = ["bundled"] }
+uuid = { version = "1", features = ["v7"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+unicode-segmentation = "1"
+regex = "1"

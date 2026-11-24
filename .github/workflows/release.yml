@@ -1,0 +1,68 @@
+# vX.Y.Z 태그를 push하면 Windows 설치 파일(NSIS)을 빌드해 GitHub Release에 올린다.
+# 태그 버전과 Cargo.toml·package.json·tauri.conf.json 의 버전이 다르면 실패한다.
+name: Release
+
+on:
+  push:
+    tags: ["v*.*.*"]
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    name: Windows installer
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Check tag matches app version
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}".TrimStart("v")
+          $versions = [ordered]@{
+            "Cargo.toml"                = (Select-String -Path Cargo.toml -Pattern '^version = "(.+)"' | Select-Object -First 1).Matches[0].Groups[1].Value
+            "package.json"              = (Get-Content package.json -Raw | ConvertFrom-Json).version
+            "src-tauri/tauri.conf.json" = (Get-Content src-tauri/tauri.conf.json -Raw | ConvertFrom-Json).version
+          }
+          $bad = $false
+          foreach ($k in $versions.Keys) {
+            "{0}: {1}" -f $k, $versions[$k]
+            if ($versions[$k] -ne $tag) { "::error file=$k::version $($versions[$k]) != tag $tag"; $bad = $true }
+          }
+          if ($bad) { exit 1 }
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: npm ci
+        run: npm ci
+
+      # CI를 거치지 않은 커밋에 태그가 붙을 수 있으므로 릴리스 전에 한 번 더 돌린다.
+      - name: Test
+        run: cargo test --workspace
+        env:
+          TMS_REQUIRE_ENGINE_DLL: "1"
+
+      # tauri build(beforeBuildCommand 로 npm run build 포함) → 설치 파일을 Release에 올린다.
+      - uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: Lingua TMS ${{ github.ref_name }}
+          releaseBody: |
+            Windows 설치 파일: 아래 Assets의 `Lingua.TMS_*_x64-setup.exe`
+
+            - 코드 서명이 없어 처음 실행할 때 SmartScreen 경고가 뜰 수 있다("추가 정보" → "실행").
+            - WebView2 런타임이 필요하다(Windows 10/11 기본 포함).
+          releaseDraft: false
+          prerelease: false
+          uploadUpdaterJson: false
+          generateReleaseNotes: true

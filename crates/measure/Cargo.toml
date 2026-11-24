@@ -1,0 +1,11 @@
+[package]
+name = "tms-measure"
+description = "측정 엔진 추상화(Measurer)와 엔진 DLL(tms_measure.h) 바인딩"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+libloading = "0.8"
+serde = { workspace = true }
+thiserror = { workspace = true }

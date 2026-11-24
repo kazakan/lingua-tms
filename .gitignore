@@ -1,0 +1,24 @@
+# 빌드 결과
+/target/
+/dist/
+/node_modules/
+*.tsbuildinfo
+
+# Tauri 가 빌드 때 만드는 스키마
+/src-tauri/gen/schemas/
+
+# 프로젝트 파일(문구 DB)과 SQLite 임시 파일
+*.tms
+*.tms-wal
+*.tms-shm
+*.tms-journal
+
+# claude.ai 채팅에서 받은 설계용 스크립트(코드베이스 아님)
+/Claude outputs/
+
+# OS·에디터
+.DS_Store
+Thumbs.db
+.vscode/*
+!.vscode/extensions.json
+.idea/
