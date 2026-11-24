@@ -11,7 +11,7 @@ use tms_core::import::{ImportOptions, ImportPlan, ImportResult, ImportSource};
 use tms_core::model::{CellEdit, CellKey, ChangesetKind, ChangesetMeta, RevRow};
 use tms_core::rusqlite::Connection;
 use tms_core::validate::{self, Registry};
-use tms_core::{db, export, grid, history, import, sheet, tokens};
+use tms_core::{db, export, grid, history, import, sheet, tokens, values};
 
 struct Project {
     path: PathBuf,
@@ -136,6 +136,56 @@ fn apply_import(state: State<'_, AppState>, source: ImportSource, options: Impor
         let table = source.load(conn)?;
         import::apply_import(conn, &author, &table, &options, &source.label())
     })
+}
+
+#[tauri::command]
+fn list_changesets(state: State<'_, AppState>, limit: usize) -> CmdResult<Vec<history::ChangesetInfo>> {
+    with_project(&state, |conn| history::list_changesets(conn, limit))
+}
+
+#[tauri::command]
+fn list_releases(state: State<'_, AppState>) -> CmdResult<Vec<history::Release>> {
+    with_project(&state, |conn| history::list_releases(conn))
+}
+
+/// 릴리스 만들기. changeset_id 가 없으면 가장 최근 변경 묶음에 붙인다.
+#[tauri::command]
+fn create_release(
+    state: State<'_, AppState>,
+    name: String,
+    changeset_id: Option<i64>,
+    note: Option<String>,
+) -> CmdResult<i64> {
+    with_project(&state, |conn| history::create_release(conn, &name, changeset_id, note.as_deref()))
+}
+
+/// 두 시점(변경 묶음 번호) 사이에 바뀐 칸. 0 = 처음(빈 상태).
+#[tauri::command]
+fn diff_changesets(state: State<'_, AppState>, from: i64, to: i64) -> CmdResult<Vec<history::KeyedDiff>> {
+    with_project(&state, |conn| {
+        let d = history::diff(conn, from, to)?;
+        history::with_keys(conn, d)
+    })
+}
+
+/// 변경 묶음 하나 되돌리기. 그 뒤에 다시 바뀐 칸은 충돌로 돌려주고 건너뛴다.
+#[tauri::command]
+fn revert_changeset(state: State<'_, AppState>, id: i64) -> CmdResult<history::RevertOutcome> {
+    let author = state.author.clone();
+    with_project(&state, |conn| history::revert_changeset(conn, id, &author))
+}
+
+/// 전체를 그 시점으로 되돌린다(새 변경 묶음으로 씀).
+#[tauri::command]
+fn rollback_to(state: State<'_, AppState>, changeset_id: i64) -> CmdResult<Option<i64>> {
+    let author = state.author.clone();
+    with_project(&state, |conn| history::rollback_to(conn, changeset_id, &author))
+}
+
+/// 파일 두 개 비교(관리용 엑셀·제품 형식 모두). a → b 로 바뀐 칸.
+#[tauri::command]
+fn compare_sources(state: State<'_, AppState>, a: ImportSource, b: ImportSource) -> CmdResult<Vec<values::ValueDiff>> {
+    with_project(&state, |conn| Ok(values::diff_tables(&a.load(conn)?, &b.load(conn)?)))
 }
 
 #[tauri::command]
@@ -286,6 +336,13 @@ pub fn run() {
             workbook_preview,
             plan_import,
             apply_import,
+            list_changesets,
+            list_releases,
+            create_release,
+            diff_changesets,
+            revert_changeset,
+            rollback_to,
+            compare_sources,
             list_adapters,
             list_export_targets,
             save_export_target,

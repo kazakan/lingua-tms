@@ -120,6 +120,48 @@ export interface ImportResult {
   changed_cells: number;
 }
 
+// ── 이력 ─────────────────────────────────
+
+export interface ChangesetInfo {
+  id: number;
+  created_at: string;
+  author: string;
+  kind: "edit" | "import" | "revert" | "rename" | "admin";
+  message: string | null;
+  reverts_id: number | null;
+  cell_changes: number;
+  entity_changes: number;
+  releases: string[];
+}
+
+export interface Release {
+  name: string;
+  changeset_id: number;
+  created_at: string;
+  note: string | null;
+}
+
+export interface KeyedDiff {
+  token_id: string;
+  token_key: string;
+  locale: string;
+  old: CellValue | null;
+  new: CellValue | null;
+}
+
+export interface RevertOutcome {
+  changeset_id: number | null;
+  /** 대상 변경 묶음 뒤에 다시 바뀌어 건너뛴 칸 */
+  conflicts: { token_id: string; locale: string }[];
+}
+
+export interface ValueDiff {
+  key: string;
+  locale: string;
+  old: string | null;
+  new: string | null;
+}
+
 // ── 내보내기 ─────────────────────────────
 
 export interface AdapterInfo {
@@ -272,6 +314,15 @@ export const api = {
     invoke<ImportPlan>("plan_import", { source, options }),
   applyImport: (source: ImportSource, options: ImportOptions) =>
     invoke<ImportResult>("apply_import", { source, options }),
+  listChangesets: (limit: number) => invoke<ChangesetInfo[]>("list_changesets", { limit }),
+  listReleases: () => invoke<Release[]>("list_releases"),
+  createRelease: (name: string, changesetId: number | null, note: string | null) =>
+    invoke<number>("create_release", { name, changesetId, note }),
+  /** 0 = 처음(빈 상태) */
+  diffChangesets: (from: number, to: number) => invoke<KeyedDiff[]>("diff_changesets", { from, to }),
+  revertChangeset: (id: number) => invoke<RevertOutcome>("revert_changeset", { id }),
+  rollbackTo: (changesetId: number) => invoke<number | null>("rollback_to", { changesetId }),
+  compareSources: (a: ImportSource, b: ImportSource) => invoke<ValueDiff[]>("compare_sources", { a, b }),
   listAdapters: () => invoke<AdapterInfo[]>("list_adapters"),
   listExportTargets: () => invoke<ExportTarget[]>("list_export_targets"),
   saveExportTarget: (target: ExportTargetInput) => invoke<string>("save_export_target", { target }),

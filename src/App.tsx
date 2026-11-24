@@ -6,6 +6,7 @@ import StringsView, { type CellRef } from "./views/StringsView";
 import ImportView from "./views/ImportView";
 import ExportView from "./views/ExportView";
 import ValidationView from "./views/ValidationView";
+import HistoryView from "./views/HistoryView";
 
 const FILTERS = [{ name: "TMS 프로젝트", extensions: ["tms"] }];
 
@@ -17,6 +18,7 @@ const TABS = [
   { id: "validation", label: "검증" },
   { id: "import", label: "가져오기" },
   { id: "export", label: "내보내기" },
+  { id: "history", label: "이력" },
 ] as const;
 type TabId = (typeof TABS)[number]["id"];
 
@@ -89,6 +91,7 @@ export default function App() {
           {tab === "validation" && <ValidationView run={run} onOpenCell={openCell} />}
           {tab === "import" && <ImportView run={run} />}
           {tab === "export" && <ExportView run={run} />}
+          {tab === "history" && <HistoryView run={run} onOpenCell={openCell} />}
         </main>
       )}
     </div>

@@ -5,7 +5,7 @@
 //! - 이력(`translation_rev`)은 추가만 한다. 롤백도 과거 값을 새 변경 묶음으로 쓰는 방식이다.
 //! - 변경 묶음 번호(`changeset.id`)가 곧 버전이다. 릴리스는 번호에 붙인 이름표다.
 
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
 use serde::Serialize;
@@ -348,15 +348,128 @@ pub fn rollback_to(conn: &mut Connection, changeset_id: i64, author: &str) -> Re
 
 /// 릴리스 만들기. `changeset_id`가 None이면 가장 최근 변경 묶음에 붙인다.
 pub fn create_release(conn: &Connection, name: &str, changeset_id: Option<i64>, note: Option<&str>) -> Result<i64> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err(Error::Invalid("릴리스 이름이 비어 있음".into()));
+    }
+    let exists: Option<i64> = conn
+        .query_row("SELECT changeset_id FROM release WHERE name = ?1", [name], |r| r.get(0))
+        .optional()?;
+    if let Some(at) = exists {
+        return Err(Error::Invalid(format!("이미 있는 릴리스 이름: {name}(변경 묶음 #{at})")));
+    }
     let id = match changeset_id {
         Some(id) => id,
         None => latest_changeset(conn)?.ok_or_else(|| Error::Invalid("변경 이력이 없음".into()))?,
     };
+    let note = note.map(str::trim).filter(|n| !n.is_empty());
     conn.execute(
         "INSERT INTO release (name, changeset_id, note) VALUES (?1, ?2, ?3)",
         params![name, id, note],
     )?;
     Ok(id)
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Release {
+    pub name: String,
+    pub changeset_id: i64,
+    pub created_at: String,
+    pub note: Option<String>,
+}
+
+/// 릴리스 전체(최신 변경 묶음 순).
+pub fn list_releases(conn: &Connection) -> Result<Vec<Release>> {
+    let mut stmt =
+        conn.prepare("SELECT name, changeset_id, created_at, note FROM release ORDER BY changeset_id DESC, created_at DESC")?;
+    let rows = stmt.query_map([], |r| {
+        Ok(Release {
+            name: r.get(0)?,
+            changeset_id: r.get(1)?,
+            created_at: r.get(2)?,
+            note: r.get(3)?,
+        })
+    })?;
+    Ok(rows.collect::<rusqlite::Result<_>>()?)
+}
+
+/// 변경 묶음 한 줄(이력 화면 목록).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ChangesetInfo {
+    pub id: i64,
+    pub created_at: String,
+    pub author: String,
+    pub kind: String,
+    pub message: Option<String>,
+    pub reverts_id: Option<i64>,
+    /// 바뀐 문구 칸 수.
+    pub cell_changes: i64,
+    /// 바뀐 엔티티(토큰, 제약, 내보내기 대상 ...) 수.
+    pub entity_changes: i64,
+    /// 이 변경 묶음에 붙은 릴리스 이름.
+    pub releases: Vec<String>,
+}
+
+/// 최근 변경 묶음 `limit`개(최신 순).
+pub fn list_changesets(conn: &Connection, limit: usize) -> Result<Vec<ChangesetInfo>> {
+    let mut by_changeset: HashMap<i64, Vec<String>> = HashMap::new();
+    for r in list_releases(conn)? {
+        by_changeset.entry(r.changeset_id).or_default().push(r.name);
+    }
+    let mut stmt = conn.prepare(
+        "SELECT c.id, c.created_at, c.author, c.kind, c.message, c.reverts_id,
+                (SELECT count(*) FROM translation_rev r WHERE r.changeset_id = c.id),
+                (SELECT count(*) FROM entity_rev e WHERE e.changeset_id = c.id)
+         FROM changeset c ORDER BY c.id DESC LIMIT ?1",
+    )?;
+    let rows = stmt.query_map([limit as i64], |r| {
+        Ok(ChangesetInfo {
+            id: r.get(0)?,
+            created_at: r.get(1)?,
+            author: r.get(2)?,
+            kind: r.get(3)?,
+            message: r.get(4)?,
+            reverts_id: r.get(5)?,
+            cell_changes: r.get(6)?,
+            entity_changes: r.get(7)?,
+            releases: Vec::new(),
+        })
+    })?;
+    let mut out: Vec<ChangesetInfo> = rows.collect::<rusqlite::Result<_>>()?;
+    for c in &mut out {
+        c.releases = by_changeset.remove(&c.id).unwrap_or_default();
+    }
+    Ok(out)
+}
+
+/// 화면용 diff 한 칸: 토큰명을 붙인다.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct KeyedDiff {
+    pub token_id: String,
+    pub token_key: String,
+    pub locale: String,
+    pub old: Option<CellValue>,
+    pub new: Option<CellValue>,
+}
+
+/// diff 에 현재 토큰명을 붙이고 토큰명·언어 순으로 정렬한다.
+pub fn with_keys(conn: &Connection, diffs: Vec<CellDiff>) -> Result<Vec<KeyedDiff>> {
+    let keys: HashMap<String, String> = crate::tokens::list_tokens(conn)?
+        .into_iter()
+        .map(|t| (t.id, t.key))
+        .collect();
+    let mut out: Vec<KeyedDiff> = diffs
+        .into_iter()
+        .map(|d| KeyedDiff {
+            token_key: keys.get(&d.key.token_id).cloned().unwrap_or_else(|| d.key.token_id.clone()),
+            token_id: d.key.token_id,
+            locale: d.key.locale,
+            old: d.old,
+            new: d.new,
+        })
+        .collect();
+    out.sort_by(|a, b| (&a.token_key, &a.locale).cmp(&(&b.token_key, &b.locale)));
+    Ok(out)
 }
 
 pub fn release_changeset(conn: &Connection, name: &str) -> Result<i64> {
@@ -520,6 +633,32 @@ mod tests {
         assert_eq!(read_cell(&conn, &CellKey::new(&b, "ko-KR")).unwrap(), None);
         // 바뀐 게 없으면 변경 묶음을 만들지 않는다
         assert_eq!(apply_edits(&mut conn, &meta(ChangesetKind::Edit), &[edit(&b, "ko-KR", "")]).unwrap(), None);
+    }
+
+    #[test]
+    fn changeset_list_counts_changes_and_shows_releases() {
+        let (mut conn, a, b) = setup();
+        let a_ko = CellKey::new(&a, "ko-KR");
+        let b_ko = CellKey::new(&b, "ko-KR");
+        let c1 = apply(&mut conn, &meta(ChangesetKind::Import), &[set(&a_ko, "가"), set(&b_ko, "나")])
+            .unwrap()
+            .unwrap();
+        create_release(&conn, " v1.0 ", Some(c1), Some("첫 배포")).unwrap();
+        assert!(create_release(&conn, "v1.0", None, None).is_err());
+        assert!(create_release(&conn, "  ", None, None).is_err());
+
+        let list = list_changesets(&conn, 10).unwrap();
+        let top = &list[0];
+        assert_eq!((top.id, top.kind.as_str(), top.cell_changes, top.entity_changes), (c1, "import", 2, 0));
+        assert_eq!(top.releases, vec!["v1.0"]);
+        // 토큰 생성 변경 묶음은 엔티티 변경 1건
+        assert_eq!((list[1].cell_changes, list[1].entity_changes), (0, 1));
+        assert_eq!(list_releases(&conn).unwrap()[0].note.as_deref(), Some("첫 배포"));
+
+        // diff 에 토큰명을 붙이고 토큰명 순으로
+        let d = with_keys(&conn, diff(&conn, 0, c1).unwrap()).unwrap();
+        let keys: Vec<_> = d.iter().map(|x| x.token_key.as_str()).collect();
+        assert_eq!(keys, vec!["home.sub", "home.title"]);
     }
 
     #[test]

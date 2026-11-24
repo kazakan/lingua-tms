@@ -18,15 +18,22 @@ Cargo.toml            Rust 워크스페이스
 crates/core           tms-core: SQLite 저장소, 변경 이력, diff, 검증기. 화면과 무관, 로직은 전부 여기
   migrations/         스키마(SQL). 추가만 한다
   src/db.rs           프로젝트 파일 열기, 연결 설정, 마이그레이션
-  src/history.rs      문구값 쓰기의 유일한 경로(apply), 과거 시점, diff, 되돌리기, 롤백, 릴리스
-  src/tokens.rs       토큰·언어. 토큰명 변경 이력
+  src/history.rs      문구값 쓰기의 유일한 경로(apply, apply_edits), 과거 시점, diff, 되돌리기, 롤백,
+                      릴리스, 변경 묶음 목록, entity_rev 기록(record_entity)
+  src/tokens.rs       토큰·언어·태그. 토큰명 변경 이력
   src/grid.rs         편집 화면용 조회(행 = 토큰, 열 = 언어, outdated 표시)
-  src/validate/       검증기 레지스트리, 내장 검증기 9종, 제약 해석
+  src/sheet.rs        엑셀·ODS 읽기(calamine), 열 매핑 → 값 표
+  src/values.rs       값 표(토큰명 × 언어 → 값)와 두 표의 diff
+  src/import.rs       가져오기 계획(미리보기)·적용(Import 변경 묶음 하나)
+  src/export.rs       내보내기 대상, 제품 키 고정, 포맷 어댑터(내보내기·역가져오기), 검증 게이트
+  src/validate/       검증기 레지스트리, 내장 검증기 9종, 제약 해석(resolve), 저장(store), 전체 검증(run)
 crates/measure        tms-measure: Measurer 트레이트 + 엔진 DLL 바인딩(libloading)
 crates/engine-stub    개발용 가짜 엔진 DLL. tms_measure.h 를 Rust로 구현
 engine/include/tms_measure.h   엔진 팀과의 C 인터페이스 계약(ABI 1)
 src-tauri/            Tauri 2 앱. 명령(IPC)만 두고 tms-core 를 호출한다
 src/                  화면(React + TypeScript + Vite). api.ts 가 Rust 명령 래퍼
+  App.tsx             뼈대(프로젝트 열기, 탭, 오류 띠). 탭: 문구·검증·가져오기·내보내기·이력
+  views/              탭별 화면. components/ 는 공용(열 매핑 편집기, 변경 표시)
 ```
 
 ## 빌드와 실행 (Windows)
@@ -67,24 +74,22 @@ FFI 테스트(`crates/measure/tests/stub_engine.rs`)는 `tms_measure_stub.dll`�
 - CI(`.github/workflows/ci.yml`): main push와 PR마다 Windows에서 `npm run build`, clippy(`-D warnings`), `cargo test --workspace`.
 - 설치 파일은 코드 서명이 없다. 처음 실행할 때 SmartScreen 경고가 뜬다.
 
-## 현재 상태 (2026-11-24)
+## 현재 상태 (2026-11-25)
 
-- 버전 0.0.1. Windows 11에서 확인한 것(TODO 1 완료):
-  - `cargo test --workspace` 통과(core 19, engine-stub 2, 스텁 DLL FFI 1)
-  - clippy(`-D warnings`) 경고 없음, `npm run build` 성공
-  - `npm run tauri dev`로 창을 띄워 새 프로젝트 → 언어 추가 → 토큰 추가 → 셀 편집 → 이력 확인까지 동작
-  - 원문이 나중에 바뀐 셀의 노란색 표시도 확인
-- git 저장소와 GitHub(public), CI·릴리스 워크플로가 있다(위 "버전과 릴리스").
-- 화면은 뼈대 수준이다.
-  - 프로젝트 새로 만들기·열기(.tms 파일), 언어 추가, 토큰 추가, 토큰명 변경
-  - 문구 표(Glide): 셀 편집, 여러 셀 복사·붙여넣기, Delete 로 지우기, 검색·필터
-  - 원문이 더 최근에 바뀐 셀 노란색, 미번역 회색, 선택한 셀의 이력 보기
-- 검증기는 코어에 구현·테스트만 되어 있고 화면과 연결되지 않았다. `list_validators` 명령만 있다.
+- 마지막 릴리스 0.0.1. 그 뒤 main 에 작업 2~6(아래 "다음 작업")이 들어갔고 아직 릴리스하지 않았다.
+- Windows 11에서 확인한 것:
+  - `cargo test --workspace` 통과(core 33, engine-stub 2, 스텁 DLL FFI 1), clippy(`-D warnings`) 경고 없음, `npm run build` 성공
+  - `npm run tauri dev`로 각 탭을 직접 눌러 확인: 표 편집·붙여넣기, 엑셀 가져오기(이전 토큰명 매칭),
+    내보내기(키 고정·직접 지정·역가져오기), 검증 규칙·결과·셀 이동·내보내기 차단, 이력(릴리스·되돌리기 충돌·두 시점·파일 비교)
+- 렌더 검증(폭·줄 수)은 아직 화면과 엔진에 연결되지 않았다(후순위). 렌더 규칙은 저장은 되지만 검증에서 건너뛴다.
+- 화면 수동 시험은 computer-use 로 한다. 시험용 엑셀은 rust_xlsxwriter 로 만들면 된다(openpyxl 없음).
 
 ## 지켜야 할 규칙
 
 1. **문구값(`translation`)은 `history::apply`로만 쓴다.** 직접 INSERT/UPDATE/DELETE 하면 트리거가 거부한다.
-   한 번의 사용자 동작(셀 편집, 엑셀 가져오기 한 번)이 변경 묶음(changeset) 하나다.
+   - 화면 편집은 `apply_edits`(값이 같은 칸은 건너뜀).
+   - 토큰 생성과 같은 묶음이어야 하면 트랜잭션 안에서 `insert_changeset` → `write_changes_in`(가져오기가 이렇게 한다).
+   - 한 번의 사용자 동작(셀 편집, 붙여넣기, 엑셀 가져오기 한 번)이 변경 묶음(changeset) 하나다.
 2. 이력 테이블(`translation_rev`, `entity_rev`, `token_key_history`)은 추가만 한다.
    롤백·되돌리기도 과거 값을 새 변경 묶음으로 쓴다. 이력 행을 지우거나 고치지 않는다.
 3. 마이그레이션은 추가만 한다.
@@ -171,7 +176,7 @@ FFI 테스트(`crates/measure/tests/stub_engine.rs`)는 `tms_measure_stub.dll`�
    - 문구 표: 위반 셀 색, "검증 실패" 필터, 옆 패널에 위반 내용. 검증 결과에서 셀로 이동
    - 내보내기 게이트(`export::check_export`): error 는 차단, warning 은 사유를 받아 변경 묶음 메시지에 남김
    - 아직 없음: 상태(reviewed/approved) 바꾸는 승인 화면과 그 차단
-6. **이력 화면**: 릴리스 만들기, 두 시점 diff, 되돌리기·롤백, 두 엑셀 파일 비교
+6. ~~**이력 화면**~~ 완료: 변경 묶음 목록, 릴리스 만들기, 되돌리기(충돌 보고)·전체 롤백, 두 시점 diff, 파일 두 개 비교
 
 **후순위** (2026-11-25 결정: 렌더 연결은 위 작업을 마친 뒤에 한다)
 
