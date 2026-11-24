@@ -11,6 +11,7 @@ export interface Token {
   key: string;
   description: string | null;
   status: string;
+  tags: string[];
 }
 
 export interface Locale {
@@ -172,6 +173,19 @@ export interface ExportReport {
   changeset_id: number | null;
 }
 
+export interface ExportIssue {
+  token_key: string;
+  locale: string;
+  validator: string;
+  message: string;
+}
+
+/** error 는 내보내기를 막고, warning 은 사유를 적어야 진행한다 */
+export interface ExportCheck {
+  errors: ExportIssue[];
+  warnings: ExportIssue[];
+}
+
 // ── 검증 ─────────────────────────────────
 
 export interface ValidatorInfo {
@@ -179,6 +193,62 @@ export interface ValidatorInfo {
   description: string;
   params_schema: unknown;
   needs_render: boolean;
+}
+
+export type Severity = "error" | "warning" | "info";
+
+/** 전역 / 태그 / 토큰(id) */
+export type Scope = { kind: "global" } | { kind: "tag"; ref: string } | { kind: "token"; ref: string };
+
+export interface ConstraintDef {
+  id: string;
+  validator: string;
+  params: Record<string, unknown>;
+  scope: Scope;
+  /** null = 전 언어 */
+  locale: string | null;
+  severity: Severity;
+  enabled: boolean;
+  description: string | null;
+}
+
+export interface ConstraintInput extends Omit<ConstraintDef, "id"> {
+  id: string | null;
+}
+
+export interface Outcome {
+  verdict: "pass" | "fail";
+  message: string | null;
+  metrics: unknown;
+}
+
+export interface Finding {
+  constraint_id: string;
+  validator: string;
+  severity: Severity;
+  outcome: Outcome | null;
+  /** 검증기 자체 오류(파라미터 오류 등) */
+  error: string | null;
+}
+
+export interface CellFindings {
+  token_id: string;
+  token_key: string;
+  locale: string;
+  findings: Finding[];
+}
+
+export interface ValidationReport {
+  cells: CellFindings[];
+  summary: {
+    cells: number;
+    checks: number;
+    error: number;
+    warning: number;
+    info: number;
+    broken: number;
+    skipped_render: number;
+  };
 }
 
 export const api = {
@@ -211,5 +281,12 @@ export const api = {
     invoke<ExportReport>("export_to_file", { targetId, path, note }),
   fixExternalKey: (targetId: string, tokenId: string, key: string) =>
     invoke<number>("fix_external_key", { targetId, tokenId, key }),
+  checkExport: (targetId: string) => invoke<ExportCheck>("check_export", { targetId }),
   listValidators: () => invoke<ValidatorInfo[]>("list_validators"),
+  listConstraints: () => invoke<ConstraintDef[]>("list_constraints"),
+  saveConstraint: (input: ConstraintInput) => invoke<string>("save_constraint", { input }),
+  deleteConstraint: (id: string) => invoke<void>("delete_constraint", { id }),
+  validateAll: () => invoke<ValidationReport>("validate_all"),
+  listTags: () => invoke<string[]>("list_tags"),
+  setTokenTags: (tokenId: string, tags: string[]) => invoke<number | null>("set_token_tags", { tokenId, tags }),
 };

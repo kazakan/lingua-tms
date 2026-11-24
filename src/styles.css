@@ -393,6 +393,43 @@ table.table tr.active td {
   background: #eff6ff;
 }
 
+/* react-jsonschema-form(제약 파라미터) */
+.rjsf fieldset {
+  border: none;
+  margin: 0;
+  padding: 0;
+}
+
+.rjsf legend,
+.rjsf #root__title {
+  display: none;
+}
+
+.rjsf .form-group:not(.field-object) {
+  display: grid;
+  grid-template-columns: 110px 1fr;
+  gap: 2px 8px;
+  align-items: center;
+  margin-bottom: 6px;
+}
+
+.rjsf .form-group:not(.field-object) > :not(label) {
+  grid-column: 2;
+}
+
+.rjsf .field-description,
+.rjsf .help-block {
+  color: #64748b;
+  font-size: 12px;
+}
+
+.rjsf .error-detail {
+  margin: 0;
+  padding-left: 16px;
+  color: #b91c1c;
+  font-size: 12px;
+}
+
 .table-scroll {
   max-height: 420px;
   overflow: auto;

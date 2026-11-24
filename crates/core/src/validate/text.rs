@@ -32,6 +32,9 @@ impl Validator for Required {
     fn description(&self) -> &'static str {
         "빈 값 금지"
     }
+    fn checks_missing(&self) -> bool {
+        true
+    }
     fn params_schema(&self) -> Value {
         json!({ "type": "object", "properties": {} })
     }

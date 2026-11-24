@@ -6,6 +6,8 @@
 
 mod render;
 mod resolve;
+mod run;
+mod store;
 mod text;
 
 use std::collections::BTreeMap;
@@ -16,6 +18,8 @@ use serde_json::Value;
 use tms_measure::{FontId, MeasureError, Measurer, Style};
 
 pub use resolve::{effective_constraints, load_constraints, ConstraintDef, Scope};
+pub use run::{validate_all, CellFindings, ValidationReport, ValidationSummary};
+pub use store::{delete_constraint, save_constraint, ConstraintInput};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -26,6 +30,14 @@ pub enum Severity {
 }
 
 impl Severity {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Error => "error",
+            Self::Warning => "warning",
+            Self::Info => "info",
+        }
+    }
+
     pub fn parse(s: &str) -> Option<Self> {
         match s {
             "error" => Some(Self::Error),
@@ -105,6 +117,10 @@ pub trait Validator: Send + Sync {
     /// 제약 입력 폼을 만들 JSON Schema.
     fn params_schema(&self) -> Value;
     fn needs_render(&self) -> bool {
+        false
+    }
+    /// 미번역 셀(값 없음)도 검사하는가. 기본은 아니다(미번역은 `text.required`만 본다).
+    fn checks_missing(&self) -> bool {
         false
     }
     fn check(

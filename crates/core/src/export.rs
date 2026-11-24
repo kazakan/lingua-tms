@@ -13,10 +13,11 @@ use rusqlite::{params, Connection, OptionalExtension, Transaction};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use crate::history::insert_changeset;
+use crate::history::{insert_changeset, record_entity};
 use crate::ids::new_id;
 use crate::model::{ChangesetKind, ChangesetMeta};
 use crate::tokens::{list_locales, list_tokens, source_locale, token_key};
+use crate::validate::{validate_all, Registry, Severity};
 use crate::values::ValueTable;
 use crate::{history, sheet, Error, Result};
 
@@ -97,7 +98,7 @@ pub fn save_target(conn: &mut Connection, author: &str, input: &ExportTargetInpu
             params![id, new.name, new.adapter, config],
         )?;
     }
-    entity_rev(&tx, changeset_id, "export_target", &id, old.as_ref(), Some(&new))?;
+    record_entity(&tx, changeset_id, "export_target", &id, old.as_ref(), Some(&new))?;
     tx.commit()?;
     Ok(id)
 }
@@ -115,31 +116,8 @@ pub fn delete_target(conn: &mut Connection, author: &str, id: &str) -> Result<()
     let meta = ChangesetMeta::new(author, ChangesetKind::Admin).with_message(format!("delete export target {}", old.name));
     let changeset_id = insert_changeset(&tx, &meta)?;
     tx.execute("DELETE FROM export_target WHERE id = ?1", [id])?;
-    entity_rev(&tx, changeset_id, "export_target", id, Some(&old), None::<&ExportTarget>)?;
+    record_entity(&tx, changeset_id, "export_target", id, Some(&old), None::<&ExportTarget>)?;
     tx.commit()?;
-    Ok(())
-}
-
-fn entity_rev<T: Serialize>(
-    tx: &Transaction,
-    changeset_id: i64,
-    entity_type: &str,
-    entity_id: &str,
-    old: Option<&T>,
-    new: Option<&T>,
-) -> Result<()> {
-    let op = match (old, new) {
-        (None, Some(_)) => "insert",
-        (Some(_), Some(_)) => "update",
-        (Some(_), None) => "delete",
-        (None, None) => return Ok(()),
-    };
-    let to_json = |v: Option<&T>| v.map(serde_json::to_string).transpose();
-    tx.execute(
-        "INSERT INTO entity_rev (changeset_id, entity_type, entity_id, op, old_json, new_json)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-        params![changeset_id, entity_type, entity_id, op, to_json(old)?, to_json(new)?],
-    )?;
     Ok(())
 }
 
@@ -220,7 +198,7 @@ fn insert_key(tx: &Transaction, changeset_id: i64, target_id: &str, token_id: &s
         "INSERT INTO token_external_key (target_id, external_key, token_id) VALUES (?1, ?2, ?3)",
         params![target_id, key, token_id],
     )?;
-    entity_rev(
+    record_entity(
         tx,
         changeset_id,
         "token_external_key",
@@ -320,20 +298,89 @@ pub struct ExportReport {
     pub changeset_id: Option<i64>,
 }
 
+/// 내보내기를 막거나 사유가 필요한 검증 결과 한 건.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ExportIssue {
+    pub token_key: String,
+    pub locale: String,
+    pub validator: String,
+    pub message: String,
+}
+
+/// 내보낼 셀(토큰 × 대상 언어)의 검증 결과. error 는 내보내기를 막고, warning 은 사유를 적어야 진행한다.
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+pub struct ExportCheck {
+    pub errors: Vec<ExportIssue>,
+    pub warnings: Vec<ExportIssue>,
+}
+
+pub fn check_export(conn: &Connection, registry: &Registry, target_id: &str) -> Result<ExportCheck> {
+    let preview = plan_export(conn, target_id)?;
+    let tokens: HashSet<&str> = preview.rows.iter().map(|r| r.token_id.as_str()).collect();
+    let locales: HashSet<&str> = preview.locales.iter().map(String::as_str).collect();
+    let report = validate_all(conn, registry)?;
+    let mut out = ExportCheck::default();
+    for cell in report
+        .cells
+        .iter()
+        .filter(|c| tokens.contains(c.token_id.as_str()) && locales.contains(c.locale.as_str()))
+    {
+        for f in &cell.findings {
+            let issue = ExportIssue {
+                token_key: cell.token_key.clone(),
+                locale: cell.locale.clone(),
+                validator: f.validator.clone(),
+                // 검증기 자체 오류도 확인하지 못한 것이므로 제약의 심각도대로 다룬다.
+                message: f
+                    .outcome
+                    .as_ref()
+                    .and_then(|o| o.message.clone())
+                    .or_else(|| f.error.as_ref().map(|e| format!("검증기 오류: {e}")))
+                    .unwrap_or_default(),
+            };
+            match f.severity {
+                Severity::Error => out.errors.push(issue),
+                Severity::Warning => out.warnings.push(issue),
+                Severity::Info => {}
+            }
+        }
+    }
+    Ok(out)
+}
+
 /// 파일로 내보낸다. 새 제품 키 고정과 파일 쓰기를 한 트랜잭션으로 묶는다(파일 쓰기가 실패하면 키도 고정하지 않음).
-/// `note`(경고를 무릅쓴 사유 등)가 있으면 변경 묶음 메시지에 남긴다.
+///
+/// 검증 error 가 있으면 거부한다. warning 이 있으면 `note`(사유)가 있어야 하고, 사유는 변경 묶음 메시지에 남긴다.
 pub fn export_to_file(
     conn: &mut Connection,
     author: &str,
+    registry: &Registry,
     target_id: &str,
     path: &Path,
     note: Option<&str>,
 ) -> Result<ExportReport> {
+    let note = note.map(str::trim).filter(|n| !n.is_empty());
     let tx = conn.transaction()?;
+    let check = check_export(&tx, registry, target_id)?;
+    if !check.errors.is_empty() {
+        return Err(Error::Invalid(format!(
+            "검증 오류 {}건이 있어 내보낼 수 없음(검증 탭에서 확인)",
+            check.errors.len()
+        )));
+    }
+    if !check.warnings.is_empty() && note.is_none() {
+        return Err(Error::Invalid(format!(
+            "검증 경고 {}건: 내보내려면 사유를 적어야 함",
+            check.warnings.len()
+        )));
+    }
     let preview = plan_export(&tx, target_id)?;
     let adapter = adapter(&preview.target.adapter)?;
     let changeset_id = if preview.new_keys > 0 || note.is_some() {
         let mut message = format!("export {} ({} rows)", preview.target.name, preview.rows.len());
+        if !check.warnings.is_empty() {
+            message.push_str(&format!(", {} warnings", check.warnings.len()));
+        }
         if let Some(n) = note {
             message.push_str(": ");
             message.push_str(n);
@@ -659,7 +706,7 @@ mod tests {
         assert_eq!(p.rows[0].values.get("en-US").map(String::as_str), Some("확인"));
 
         let path = std::env::temp_dir().join(format!("tms-export-{}.xlsx", new_id()));
-        let report = export_to_file(&mut conn, "t", &target, &path, None).unwrap();
+        let report = export_to_file(&mut conn, "t", &Registry::builtin(), &target, &path, None).unwrap();
         assert_eq!((report.rows, report.new_keys), (2, 2));
         assert!(report.changeset_id.is_some());
 
@@ -690,6 +737,42 @@ mod tests {
         let plan = plan_import(&conn, &table, &ImportOptions::default()).unwrap();
         assert!(plan.changes.is_empty(), "{:?}", plan.changes);
         assert_eq!(plan.unchanged, 3);
+        std::fs::remove_file(path).ok();
+    }
+
+    #[test]
+    fn validation_gate_blocks_errors_and_needs_reason_for_warnings() {
+        use crate::validate::{save_constraint, ConstraintInput, Scope};
+        let (mut conn, target) = setup();
+        let reg = Registry::builtin();
+        let path = std::env::temp_dir().join(format!("tms-export-{}.xlsx", new_id()));
+        // common.ok 의 en-US 가 비어 있다
+        let mut required = ConstraintInput {
+            id: None,
+            validator: "text.required".into(),
+            params: json!({}),
+            scope: Scope::Global,
+            locale: None,
+            severity: Severity::Error,
+            enabled: true,
+            description: None,
+        };
+        let id = save_constraint(&mut conn, "t", &reg, &required).unwrap();
+        let check = check_export(&conn, &reg, &target).unwrap();
+        assert_eq!(check.errors.len(), 1);
+        assert_eq!((check.errors[0].token_key.as_str(), check.errors[0].locale.as_str()), ("common.ok", "en-US"));
+        assert!(export_to_file(&mut conn, "t", &reg, &target, &path, Some("사유")).is_err());
+        assert!(!path.exists());
+
+        required.id = Some(id);
+        required.severity = Severity::Warning;
+        save_constraint(&mut conn, "t", &reg, &required).unwrap();
+        assert!(export_to_file(&mut conn, "t", &reg, &target, &path, None).is_err());
+        let report = export_to_file(&mut conn, "t", &reg, &target, &path, Some("영어는 다음 배포에")).unwrap();
+        let message: String = conn
+            .query_row("SELECT message FROM changeset WHERE id = ?1", [report.changeset_id.unwrap()], |r| r.get(0))
+            .unwrap();
+        assert!(message.contains("1 warnings") && message.contains("영어는 다음 배포에"), "{message}");
         std::fs::remove_file(path).ok();
     }
 

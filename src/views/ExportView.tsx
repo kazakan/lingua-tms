@@ -5,6 +5,8 @@ import { ask, save } from "@tauri-apps/plugin-dialog";
 import {
   api,
   type AdapterInfo,
+  type ExportCheck,
+  type ExportIssue,
   type ExportPreview,
   type ExportRow,
   type ExportTarget,
@@ -54,9 +56,17 @@ export default function ExportView({ run }: { run: RunFn }) {
   const [targets, setTargets] = useState<ExportTarget[]>([]);
   const [draft, setDraft] = useState<ExportTargetInput | null>(null);
   const [preview, setPreview] = useState<ExportPreview | null>(null);
+  const [check, setCheck] = useState<ExportCheck | null>(null);
+  const [reason, setReason] = useState("");
   const [message, setMessage] = useState<string | null>(null);
 
   const loadTargets = useCallback(async () => setTargets(await api.listExportTargets()), []);
+
+  /** 미리보기와 검증 게이트(오류는 차단, 경고는 사유 필요)를 같이 읽는다. */
+  const loadPreview = async (id: string | null) => {
+    setPreview(id ? await api.planExport(id) : null);
+    setCheck(id ? await api.checkExport(id) : null);
+  };
 
   useEffect(() => {
     run(async () => {
@@ -66,13 +76,11 @@ export default function ExportView({ run }: { run: RunFn }) {
     });
   }, [run, loadTargets]);
 
-  const refreshPreview = (id: string | null) =>
-    run(async () => setPreview(id ? await api.planExport(id) : null));
-
   const select = (t: ExportTarget) => {
     setDraft({ ...t });
     setMessage(null);
-    refreshPreview(t.id);
+    setReason("");
+    run(() => loadPreview(t.id));
   };
 
   const saveDraft = () =>
@@ -84,7 +92,7 @@ export default function ExportView({ run }: { run: RunFn }) {
       const t = ts.find((x) => x.id === id);
       setDraft(t ? { ...t } : { ...draft, id });
       setMessage("저장함");
-      setPreview(await api.planExport(id));
+      await loadPreview(id);
     });
 
   const remove = () =>
@@ -93,7 +101,7 @@ export default function ExportView({ run }: { run: RunFn }) {
       if (!(await ask(`내보내기 대상 '${draft.name}'을 삭제할까요?`, { title: "대상 삭제", kind: "warning" }))) return;
       await api.deleteExportTarget(draft.id!);
       setDraft(null);
-      setPreview(null);
+      await loadPreview(null);
       await loadTargets();
     });
 
@@ -102,9 +110,10 @@ export default function ExportView({ run }: { run: RunFn }) {
     run(async () => {
       const path = await save({ filters: [{ name: "Excel", extensions: ["xlsx"] }], defaultPath: `${draft.name}.xlsx` });
       if (typeof path !== "string") return;
-      const r = await api.exportToFile(draft.id!, path, null);
+      const r = await api.exportToFile(draft.id!, path, reason.trim() || null);
       setMessage(`${r.rows}행을 내보냄. 새로 고정한 제품 키 ${r.new_keys}개${r.changeset_id ? ` (변경 묶음 #${r.changeset_id})` : ""}`);
-      setPreview(await api.planExport(draft.id!));
+      setReason("");
+      await loadPreview(draft.id!);
     });
 
   const saved = targets.find((t) => t.id === draft?.id);
@@ -185,14 +194,16 @@ export default function ExportView({ run }: { run: RunFn }) {
               </div>
             </div>
 
+            {check && <GateCard check={check} reason={reason} onReason={setReason} />}
             {preview && draft.id && (
               <PreviewCard
                 preview={preview}
+                canExport={!!check && check.errors.length === 0 && (check.warnings.length === 0 || reason.trim() !== "")}
                 onExport={exportFile}
                 onFixKey={(row, key) =>
                   run(async () => {
                     await api.fixExternalKey(draft.id!, row.token_id, key);
-                    setPreview(await api.planExport(draft.id!));
+                    await loadPreview(draft.id!);
                   })
                 }
               />
@@ -343,12 +354,57 @@ function JsonConfigEditor({ value, onChange }: { value: unknown; onChange: (v: u
   );
 }
 
+/** 내보낼 셀의 검증 결과: 오류는 내보내기를 막고, 경고는 사유를 적어야 진행한다. */
+function GateCard({ check, reason, onReason }: { check: ExportCheck; reason: string; onReason: (r: string) => void }) {
+  if (check.errors.length === 0 && check.warnings.length === 0) {
+    return <div className="card muted">검증: 내보낼 셀에 오류·경고가 없습니다</div>;
+  }
+  const list = (issues: ExportIssue[]) => (
+    <ul style={{ margin: "4px 0 8px", paddingLeft: 18 }}>
+      {issues.slice(0, 10).map((x, i) => (
+        <li key={i}>
+          {x.token_key} · {x.locale} · {x.validator}: {x.message}
+        </li>
+      ))}
+      {issues.length > 10 && <li className="muted">… 외 {issues.length - 10}건(검증 탭에서 전체 보기)</li>}
+    </ul>
+  );
+  return (
+    <div className="card">
+      {check.errors.length > 0 && (
+        <>
+          <div>
+            <span className="badge error">오류 {check.errors.length}건</span> 고치기 전에는 내보낼 수 없습니다
+          </div>
+          {list(check.errors)}
+        </>
+      )}
+      {check.warnings.length > 0 && (
+        <>
+          <div>
+            <span className="badge warning">경고 {check.warnings.length}건</span> 사유를 적으면 내보낼 수 있습니다(변경 이력에 남음)
+          </div>
+          {list(check.warnings)}
+          <input
+            placeholder="경고를 두고 내보내는 사유"
+            value={reason}
+            onChange={(e) => onReason(e.target.value)}
+            style={{ width: "100%" }}
+          />
+        </>
+      )}
+    </div>
+  );
+}
+
 function PreviewCard({
   preview,
+  canExport,
   onExport,
   onFixKey,
 }: {
   preview: ExportPreview;
+  canExport: boolean;
   onExport: () => void;
   onFixKey: (row: ExportRow, key: string) => void;
 }) {
@@ -366,7 +422,7 @@ function PreviewCard({
           {preview.rows.length}행 · 새로 고정될 제품 키 <b>{preview.new_keys}</b>개
         </span>
         <input placeholder="키·토큰 찾기" value={filter} onChange={(e) => setFilter(e.target.value)} />
-        <button className="primary" style={{ marginLeft: "auto" }} onClick={onExport}>
+        <button className="primary" style={{ marginLeft: "auto" }} disabled={!canExport} onClick={onExport}>
           파일로 내보내기
         </button>
       </div>

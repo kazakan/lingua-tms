@@ -21,6 +21,30 @@ pub(crate) fn insert_changeset(tx: &Transaction, meta: &ChangesetMeta) -> Result
     Ok(tx.last_insert_rowid())
 }
 
+/// 문구값 밖의 엔티티(토큰, 제약, 내보내기 대상 ...) 변경을 entity_rev 에 남긴다. 둘 다 None 이면 아무것도 안 한다.
+pub(crate) fn record_entity<T: Serialize>(
+    tx: &Transaction,
+    changeset_id: i64,
+    entity_type: &str,
+    entity_id: &str,
+    old: Option<&T>,
+    new: Option<&T>,
+) -> Result<()> {
+    let op = match (old, new) {
+        (None, Some(_)) => "insert",
+        (Some(_), Some(_)) => "update",
+        (Some(_), None) => "delete",
+        (None, None) => return Ok(()),
+    };
+    let to_json = |v: Option<&T>| v.map(serde_json::to_string).transpose();
+    tx.execute(
+        "INSERT INTO entity_rev (changeset_id, entity_type, entity_id, op, old_json, new_json)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        params![changeset_id, entity_type, entity_id, op, to_json(old)?, to_json(new)?],
+    )?;
+    Ok(())
+}
+
 fn cell(value: Option<String>, status: Option<String>) -> Option<CellValue> {
     match (value, status) {
         (Some(value), Some(status)) => Some(CellValue { value, status }),

@@ -2,9 +2,10 @@
 import { useCallback, useEffect, useState } from "react";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { api, type ProjectInfo } from "./api";
-import StringsView from "./views/StringsView";
+import StringsView, { type CellRef } from "./views/StringsView";
 import ImportView from "./views/ImportView";
 import ExportView from "./views/ExportView";
+import ValidationView from "./views/ValidationView";
 
 const FILTERS = [{ name: "TMS 프로젝트", extensions: ["tms"] }];
 
@@ -13,6 +14,7 @@ export type RunFn = (f: () => Promise<unknown>) => Promise<void>;
 
 const TABS = [
   { id: "strings", label: "문구" },
+  { id: "validation", label: "검증" },
   { id: "import", label: "가져오기" },
   { id: "export", label: "내보내기" },
 ] as const;
@@ -24,6 +26,8 @@ export default function App() {
   const [tab, setTab] = useState<TabId>("strings");
   // 프로젝트를 새로 열 때마다 늘려서 화면 상태를 초기화한다.
   const [epoch, setEpoch] = useState(0);
+  // 다른 화면에서 "이 셀 열기"를 누르면 문구 탭으로 가서 그 셀을 고른다.
+  const [focus, setFocus] = useState<CellRef | null>(null);
 
   const run: RunFn = useCallback(async (f) => {
     try {
@@ -47,6 +51,12 @@ export default function App() {
       setProject(await api.openProject(path));
       setEpoch((e) => e + 1);
     });
+
+  const openCell = useCallback((tokenId: string, locale: string) => {
+    setFocus({ tokenId, locale });
+    setTab("strings");
+  }, []);
+  const focusDone = useCallback(() => setFocus(null), []);
 
   return (
     <div className="app">
@@ -75,7 +85,8 @@ export default function App() {
 
       {project && (
         <main className="view" key={epoch}>
-          {tab === "strings" && <StringsView run={run} />}
+          {tab === "strings" && <StringsView run={run} focus={focus} onFocusDone={focusDone} />}
+          {tab === "validation" && <ValidationView run={run} onOpenCell={openCell} />}
           {tab === "import" && <ImportView run={run} />}
           {tab === "export" && <ExportView run={run} />}
         </main>

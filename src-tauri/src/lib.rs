@@ -10,7 +10,7 @@ use tauri::{Manager, State};
 use tms_core::import::{ImportOptions, ImportPlan, ImportResult, ImportSource};
 use tms_core::model::{CellEdit, CellKey, ChangesetKind, ChangesetMeta, RevRow};
 use tms_core::rusqlite::Connection;
-use tms_core::validate::Registry;
+use tms_core::validate::{self, Registry};
 use tms_core::{db, export, grid, history, import, sheet, tokens};
 
 struct Project {
@@ -166,7 +166,13 @@ fn plan_export(state: State<'_, AppState>, target_id: String) -> CmdResult<expor
     with_project(&state, |conn| export::plan_export(conn, &target_id))
 }
 
-/// 파일로 내보내고 새 제품 키를 고정한다.
+/// 내보낼 셀의 검증 결과(error 는 차단, warning 은 사유 필요).
+#[tauri::command]
+fn check_export(state: State<'_, AppState>, target_id: String) -> CmdResult<export::ExportCheck> {
+    with_project(&state, |conn| export::check_export(conn, &state.registry, &target_id))
+}
+
+/// 파일로 내보내고 새 제품 키를 고정한다. 검증 error 가 있으면 거부, warning 이 있으면 note(사유) 필요.
 #[tauri::command]
 fn export_to_file(
     state: State<'_, AppState>,
@@ -176,7 +182,7 @@ fn export_to_file(
 ) -> CmdResult<export::ExportReport> {
     let author = state.author.clone();
     with_project(&state, |conn| {
-        export::export_to_file(conn, &author, &target_id, Path::new(&path), note.as_deref())
+        export::export_to_file(conn, &author, &state.registry, &target_id, Path::new(&path), note.as_deref())
     })
 }
 
@@ -193,6 +199,40 @@ struct ValidatorInfo {
     description: &'static str,
     params_schema: Value,
     needs_render: bool,
+}
+
+#[tauri::command]
+fn list_constraints(state: State<'_, AppState>) -> CmdResult<Vec<validate::ConstraintDef>> {
+    with_project(&state, |conn| validate::load_constraints(conn))
+}
+
+#[tauri::command]
+fn save_constraint(state: State<'_, AppState>, input: validate::ConstraintInput) -> CmdResult<String> {
+    let author = state.author.clone();
+    with_project(&state, |conn| validate::save_constraint(conn, &author, &state.registry, &input))
+}
+
+#[tauri::command]
+fn delete_constraint(state: State<'_, AppState>, id: String) -> CmdResult<()> {
+    let author = state.author.clone();
+    with_project(&state, |conn| validate::delete_constraint(conn, &author, &id))
+}
+
+/// 전체 검증(캐시 없음). 위반이 있는 셀만 돌려준다.
+#[tauri::command]
+fn validate_all(state: State<'_, AppState>) -> CmdResult<validate::ValidationReport> {
+    with_project(&state, |conn| validate::validate_all(conn, &state.registry))
+}
+
+#[tauri::command]
+fn list_tags(state: State<'_, AppState>) -> CmdResult<Vec<String>> {
+    with_project(&state, |conn| tokens::list_tags(conn))
+}
+
+#[tauri::command]
+fn set_token_tags(state: State<'_, AppState>, token_id: String, tags: Vec<String>) -> CmdResult<Option<i64>> {
+    let author = state.author.clone();
+    with_project(&state, |conn| tokens::set_tags(conn, &author, &token_id, &tags))
 }
 
 /// 검증기 목록. 화면은 params_schema 로 제약 입력 폼을 만든다.
@@ -251,8 +291,15 @@ pub fn run() {
             save_export_target,
             delete_export_target,
             plan_export,
+            check_export,
             export_to_file,
             fix_external_key,
+            list_constraints,
+            save_constraint,
+            delete_constraint,
+            validate_all,
+            list_tags,
+            set_token_tags,
             list_validators,
         ])
         .run(tauri::generate_context!())

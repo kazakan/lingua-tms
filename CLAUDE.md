@@ -165,10 +165,12 @@ FFI 테스트(`crates/measure/tests/stub_engine.rs`)는 `tms_measure_stub.dll`�
    - `FormatAdapter` 트레이트, 기본 `table`(설정형 표). 새 Rust 어댑터는 `export::adapters()`에 추가
    - 제품 키: 내보낼 때 규칙으로 제안(겹치면 `_2`)하고 파일 쓰기와 한 트랜잭션으로 고정. 고정 전 직접 지정 가능
    - 역가져오기는 가져오기 탭의 "제품 형식 파일". 고정된 키로만 찾고, "원문으로 채우기"로 들어간 값은 건너뜀
-5. **제약과 검증 화면**
-   - `constraint_def` 추가·수정·삭제(`entity_rev` 기록)
-   - 입력 폼은 `params_schema`로 react-jsonschema-form이 만든다.
-   - 전체 검증 실행 명령과 셀별 결과 표시
+5. ~~**제약과 검증 화면**~~ 완료(`validate/store.rs`, `validate/run.rs`)
+   - 제약 저장·삭제(`entity_rev`), 토큰 태그(`tokens::set_tags`). 파라미터 폼은 react-jsonschema-form
+   - `validate_all`: 캐시 없이 전체. 미번역 셀은 `checks_missing()` 검증기(`text.required`)만, 렌더 검증기는 건너뜀(개수만 셈)
+   - 문구 표: 위반 셀 색, "검증 실패" 필터, 옆 패널에 위반 내용. 검증 결과에서 셀로 이동
+   - 내보내기 게이트(`export::check_export`): error 는 차단, warning 은 사유를 받아 변경 묶음 메시지에 남김
+   - 아직 없음: 상태(reviewed/approved) 바꾸는 승인 화면과 그 차단
 6. **이력 화면**: 릴리스 만들기, 두 시점 diff, 되돌리기·롤백, 두 엑셀 파일 비교
 
 **후순위** (2026-11-25 결정: 렌더 연결은 위 작업을 마친 뒤에 한다)
