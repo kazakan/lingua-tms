@@ -4,6 +4,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import {
   api,
   type ColumnMapping,
+  type ExportTarget,
   type ImportOptions,
   type ImportPlan,
   type ImportResult,
@@ -20,6 +21,10 @@ const MAX_ROWS_SHOWN = 500;
 
 export default function ImportView({ run }: { run: RunFn }) {
   const [locales, setLocales] = useState<Locale[]>([]);
+  const [targets, setTargets] = useState<ExportTarget[]>([]);
+  // mapped: 관리용 엑셀(열 매핑, 토큰명으로 찾음) / target: 제품 형식 파일(내보내기 대상 설정, 제품 키로 찾음)
+  const [mode, setMode] = useState<"mapped" | "target">("mapped");
+  const [targetId, setTargetId] = useState("");
   const [path, setPath] = useState<string | null>(null);
   const [sheets, setSheets] = useState<SheetPreview[]>([]);
   const [mapping, setMapping] = useState<ColumnMapping | null>(null);
@@ -28,11 +33,16 @@ export default function ImportView({ run }: { run: RunFn }) {
   const [result, setResult] = useState<ImportResult | null>(null);
 
   useEffect(() => {
-    run(async () => setLocales(await api.listLocales()));
+    run(async () => {
+      setLocales(await api.listLocales());
+      const ts = await api.listExportTargets();
+      setTargets(ts);
+      setTargetId(ts[0]?.id ?? "");
+    });
   }, [run]);
 
   // 입력이 바뀌면 이전 미리보기는 버린다.
-  useEffect(() => setPlan(null), [path, mapping, options]);
+  useEffect(() => setPlan(null), [mode, targetId, path, mapping, options]);
 
   const pickFile = () =>
     run(async () => {
@@ -45,7 +55,14 @@ export default function ImportView({ run }: { run: RunFn }) {
       setResult(null);
     });
 
-  const source: ImportSource | null = path && mappingReady(mapping) ? { kind: "mapped", path, mapping } : null;
+  const source: ImportSource | null =
+    mode === "mapped"
+      ? path && mappingReady(mapping)
+        ? { kind: "mapped", path, mapping }
+        : null
+      : path && targetId
+        ? { kind: "target", path, target_id: targetId }
+        : null;
 
   return (
     <div className="page">
@@ -54,23 +71,52 @@ export default function ImportView({ run }: { run: RunFn }) {
 
       <div className="card">
         <div className="row">
+          <label>
+            <input type="radio" checked={mode === "mapped"} onChange={() => setMode("mapped")} />
+            관리용 엑셀(열을 직접 지정, 토큰명으로 찾음)
+          </label>
+          <label>
+            <input type="radio" checked={mode === "target"} onChange={() => setMode("target")} />
+            제품 형식 파일(내보내기 대상 설정으로 읽고, 고정된 제품 키로 찾음)
+          </label>
+        </div>
+        {mode === "target" && (
+          <div className="row">
+            <label>
+              내보내기 대상
+              <select value={targetId} onChange={(e) => setTargetId(e.target.value)}>
+                {targets.map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {t.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            {targets.length === 0 && <span className="notice">내보내기 탭에서 대상을 먼저 만드세요</span>}
+          </div>
+        )}
+        <div className="row">
           <button onClick={pickFile}>파일 선택</button>
           <span className="path">{path ?? "xlsx, xlsm, xlsb, xls, ods"}</span>
         </div>
-        {mapping && <MappingEditor sheets={sheets} locales={locales} mapping={mapping} onChange={setMapping} />}
+        {mode === "mapped" && mapping && (
+          <MappingEditor sheets={sheets} locales={locales} mapping={mapping} onChange={setMapping} />
+        )}
       </div>
 
       {path && (
         <div className="card">
           <div className="row">
-            <label>
-              <input
-                type="checkbox"
-                checked={options.create_missing_tokens}
-                onChange={(e) => setOptions({ ...options, create_missing_tokens: e.target.checked })}
-              />
-              없는 토큰은 새로 만들기
-            </label>
+            {mode === "mapped" && (
+              <label>
+                <input
+                  type="checkbox"
+                  checked={options.create_missing_tokens}
+                  onChange={(e) => setOptions({ ...options, create_missing_tokens: e.target.checked })}
+                />
+                없는 토큰은 새로 만들기
+              </label>
+            )}
             <label>
               <input
                 type="checkbox"
@@ -122,6 +168,7 @@ export function PlanView({ plan }: { plan: ImportPlan }) {
     ["표 안에서 중복된 토큰명(뒤 행의 값을 씀)", plan.duplicate_keys],
     ["같은 토큰을 가리키는 다른 행이 있어 건너뜀", plan.conflicting_keys],
     ["프로젝트에 없는 토큰(건너뜀)", plan.skipped_tokens],
+    ["고정된 제품 키가 아니어서 토큰을 찾지 못함(건너뜀)", plan.unresolved_keys],
   ];
   return (
     <div className="card">

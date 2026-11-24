@@ -4,6 +4,7 @@ import { open, save } from "@tauri-apps/plugin-dialog";
 import { api, type ProjectInfo } from "./api";
 import StringsView from "./views/StringsView";
 import ImportView from "./views/ImportView";
+import ExportView from "./views/ExportView";
 
 const FILTERS = [{ name: "TMS 프로젝트", extensions: ["tms"] }];
 
@@ -13,6 +14,7 @@ export type RunFn = (f: () => Promise<unknown>) => Promise<void>;
 const TABS = [
   { id: "strings", label: "문구" },
   { id: "import", label: "가져오기" },
+  { id: "export", label: "내보내기" },
 ] as const;
 type TabId = (typeof TABS)[number]["id"];
 
@@ -75,6 +77,7 @@ export default function App() {
         <main className="view" key={epoch}>
           {tab === "strings" && <StringsView run={run} />}
           {tab === "import" && <ImportView run={run} />}
+          {tab === "export" && <ExportView run={run} />}
         </main>
       )}
     </div>

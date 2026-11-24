@@ -16,7 +16,7 @@ use crate::model::{CellChange, CellKey, CellValue, ChangesetKind, ChangesetMeta}
 use crate::sheet::{self, ColumnMapping};
 use crate::tokens::{self, create_token_in, find_token_by_key, list_locales};
 use crate::values::ValueTable;
-use crate::Result;
+use crate::{export, Result};
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ImportOptions {
@@ -34,22 +34,25 @@ pub struct ImportOptions {
 pub enum ImportSource {
     /// 열 매핑으로 읽는 엑셀(관리용 엑셀 등). 토큰명으로 찾는다.
     Mapped { path: String, mapping: ColumnMapping },
+    /// 내보내기 대상의 제품 형식 파일(역가져오기). 고정된 제품 키로 토큰을 찾는다.
+    Target { path: String, target_id: String },
 }
 
 impl ImportSource {
-    pub fn load(&self, _conn: &Connection) -> Result<ValueTable> {
+    pub fn load(&self, conn: &Connection) -> Result<ValueTable> {
         match self {
             Self::Mapped { path, mapping } => {
                 let rows = sheet::read_sheet(Path::new(path), &mapping.sheet)?;
                 sheet::extract(&rows, mapping)
             }
+            Self::Target { path, target_id } => export::read_target_file(conn, target_id, Path::new(path)),
         }
     }
 
     /// 변경 묶음 메시지에 쓸 이름(파일 이름).
     pub fn label(&self) -> String {
         let path = match self {
-            Self::Mapped { path, .. } => path,
+            Self::Mapped { path, .. } | Self::Target { path, .. } => path,
         };
         Path::new(path)
             .file_name()
@@ -89,6 +92,8 @@ pub struct ImportPlan {
     pub unknown_locales: Vec<String>,
     /// 표 안에서 두 번 이상 나온 토큰명(뒤 행의 값을 씀).
     pub duplicate_keys: Vec<String>,
+    /// 토큰을 찾지 못한 제품 키(역가져오기). 그 행은 건너뛴다.
+    pub unresolved_keys: Vec<String>,
     /// 값이 같아 쓰지 않는 칸 수.
     pub unchanged: usize,
     /// 표의 토큰 행 수(중복 제외).
@@ -101,6 +106,7 @@ pub fn plan_import(conn: &Connection, table: &ValueTable, opts: &ImportOptions) 
     let now = history::current(conn)?;
     let mut plan = ImportPlan {
         duplicate_keys: table.duplicate_keys.clone(),
+        unresolved_keys: table.unresolved.clone(),
         rows: table.keys.len(),
         ..ImportPlan::default()
     };

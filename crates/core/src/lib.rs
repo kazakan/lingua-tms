@@ -6,9 +6,11 @@
 //! - [`validate`]: 검증기 레지스트리, 내장 검증기, 제약 해석
 //! - [`sheet`]: 엑셀·ODS 읽기와 열 매핑, [`values`]: 값 표(토큰명 × 언어)와 비교
 //! - [`import`]: 가져오기 계획(미리보기)과 적용
+//! - [`export`]: 내보내기 대상, 제품 키 고정, 포맷 어댑터(내보내기·역가져오기)
 
 pub mod db;
 pub mod error;
+pub mod export;
 pub mod grid;
 pub mod history;
 pub mod ids;

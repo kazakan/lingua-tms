@@ -16,6 +16,8 @@ pub struct ValueTable {
     pub values: BTreeMap<(String, String), String>,
     /// 같은 토큰명이 두 번 이상 나온 경우. 뒤에 나온 행의 값을 쓴다.
     pub duplicate_keys: Vec<String>,
+    /// 토큰을 찾지 못해 표에 넣지 않은 행의 키(역가져오기에서 고정되지 않은 제품 키).
+    pub unresolved: Vec<String>,
 }
 
 impl ValueTable {

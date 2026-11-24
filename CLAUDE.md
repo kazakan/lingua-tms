@@ -161,10 +161,10 @@ FFI 테스트(`crates/measure/tests/stub_engine.rs`)는 `tms_measure_stub.dll`�
    - `sheet.rs`(읽기·열 매핑) → `values::ValueTable` → `import.rs`(계획·적용)
    - 토큰 생성과 값 변경이 Import 변경 묶음 하나. 빈 칸은 기본으로 건너뜀(옵션으로 지우기)
    - 토큰명은 이전 이름까지 찾고, 이전 이름으로 찾은 행은 미리보기에 표시
-4. **내보내기와 포맷 어댑터**
-   - `export_target` 설정 화면
-   - `token_external_key` 고정 저장, 새 토큰의 키 제안
-   - rust_xlsxwriter로 쓴다.
+4. ~~**내보내기와 포맷 어댑터**~~ 완료(`export.rs`)
+   - `FormatAdapter` 트레이트, 기본 `table`(설정형 표). 새 Rust 어댑터는 `export::adapters()`에 추가
+   - 제품 키: 내보낼 때 규칙으로 제안(겹치면 `_2`)하고 파일 쓰기와 한 트랜잭션으로 고정. 고정 전 직접 지정 가능
+   - 역가져오기는 가져오기 탭의 "제품 형식 파일". 고정된 키로만 찾고, "원문으로 채우기"로 들어간 값은 건너뜀
 5. **제약과 검증 화면**
    - `constraint_def` 추가·수정·삭제(`entity_rev` 기록)
    - 입력 폼은 `params_schema`로 react-jsonschema-form이 만든다.

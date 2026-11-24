@@ -108,6 +108,7 @@ export interface ImportPlan {
   conflicting_keys: string[];
   unknown_locales: string[];
   duplicate_keys: string[];
+  unresolved_keys: string[];
   unchanged: number;
   rows: number;
 }
@@ -116,6 +117,59 @@ export interface ImportResult {
   changeset_id: number | null;
   created_tokens: number;
   changed_cells: number;
+}
+
+// ── 내보내기 ─────────────────────────────
+
+export interface AdapterInfo {
+  id: string;
+  description: string;
+}
+
+export interface ExportTarget {
+  id: string;
+  name: string;
+  adapter: string;
+  config: unknown;
+}
+
+export interface ExportTargetInput {
+  id: string | null;
+  name: string;
+  adapter: string;
+  config: unknown;
+}
+
+/** 설정형 표 어댑터("table")의 설정 */
+export interface TableConfig {
+  sheet_name: string;
+  key_header: string;
+  columns: { header: string; locale: string }[];
+  key_rule: { prefix: string; case: "keep" | "upper" | "lower"; dot_replacement: string | null };
+  fallback_to_source: boolean;
+  include_deprecated: boolean;
+}
+
+export interface ExportRow {
+  token_id: string;
+  token_key: string;
+  external_key: string;
+  /** 이미 고정된 키면 true, 이번에 처음 정해지는 제안 키면 false */
+  fixed: boolean;
+  values: Record<string, string>;
+}
+
+export interface ExportPreview {
+  target: ExportTarget;
+  locales: string[];
+  rows: ExportRow[];
+  new_keys: number;
+}
+
+export interface ExportReport {
+  rows: number;
+  new_keys: number;
+  changeset_id: number | null;
 }
 
 // ── 검증 ─────────────────────────────────
@@ -148,5 +202,14 @@ export const api = {
     invoke<ImportPlan>("plan_import", { source, options }),
   applyImport: (source: ImportSource, options: ImportOptions) =>
     invoke<ImportResult>("apply_import", { source, options }),
+  listAdapters: () => invoke<AdapterInfo[]>("list_adapters"),
+  listExportTargets: () => invoke<ExportTarget[]>("list_export_targets"),
+  saveExportTarget: (target: ExportTargetInput) => invoke<string>("save_export_target", { target }),
+  deleteExportTarget: (id: string) => invoke<void>("delete_export_target", { id }),
+  planExport: (targetId: string) => invoke<ExportPreview>("plan_export", { targetId }),
+  exportToFile: (targetId: string, path: string, note: string | null) =>
+    invoke<ExportReport>("export_to_file", { targetId, path, note }),
+  fixExternalKey: (targetId: string, tokenId: string, key: string) =>
+    invoke<number>("fix_external_key", { targetId, tokenId, key }),
   listValidators: () => invoke<ValidatorInfo[]>("list_validators"),
 };

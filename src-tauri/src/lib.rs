@@ -11,7 +11,7 @@ use tms_core::import::{ImportOptions, ImportPlan, ImportResult, ImportSource};
 use tms_core::model::{CellEdit, CellKey, ChangesetKind, ChangesetMeta, RevRow};
 use tms_core::rusqlite::Connection;
 use tms_core::validate::Registry;
-use tms_core::{db, grid, history, import, sheet, tokens};
+use tms_core::{db, export, grid, history, import, sheet, tokens};
 
 struct Project {
     path: PathBuf,
@@ -138,6 +138,55 @@ fn apply_import(state: State<'_, AppState>, source: ImportSource, options: Impor
     })
 }
 
+#[tauri::command]
+fn list_adapters() -> Vec<export::AdapterInfo> {
+    export::list_adapters()
+}
+
+#[tauri::command]
+fn list_export_targets(state: State<'_, AppState>) -> CmdResult<Vec<export::ExportTarget>> {
+    with_project(&state, |conn| export::list_targets(conn))
+}
+
+#[tauri::command]
+fn save_export_target(state: State<'_, AppState>, target: export::ExportTargetInput) -> CmdResult<String> {
+    let author = state.author.clone();
+    with_project(&state, |conn| export::save_target(conn, &author, &target))
+}
+
+#[tauri::command]
+fn delete_export_target(state: State<'_, AppState>, id: String) -> CmdResult<()> {
+    let author = state.author.clone();
+    with_project(&state, |conn| export::delete_target(conn, &author, &id))
+}
+
+/// 내보낼 내용 미리보기(제품 키 제안 포함). 파일을 쓰지 않는다.
+#[tauri::command]
+fn plan_export(state: State<'_, AppState>, target_id: String) -> CmdResult<export::ExportPreview> {
+    with_project(&state, |conn| export::plan_export(conn, &target_id))
+}
+
+/// 파일로 내보내고 새 제품 키를 고정한다.
+#[tauri::command]
+fn export_to_file(
+    state: State<'_, AppState>,
+    target_id: String,
+    path: String,
+    note: Option<String>,
+) -> CmdResult<export::ExportReport> {
+    let author = state.author.clone();
+    with_project(&state, |conn| {
+        export::export_to_file(conn, &author, &target_id, Path::new(&path), note.as_deref())
+    })
+}
+
+/// 아직 키가 없는 토큰에 제품 키를 직접 지정해 고정한다.
+#[tauri::command]
+fn fix_external_key(state: State<'_, AppState>, target_id: String, token_id: String, key: String) -> CmdResult<i64> {
+    let author = state.author.clone();
+    with_project(&state, |conn| export::fix_external_key(conn, &author, &target_id, &token_id, &key))
+}
+
 #[derive(Serialize)]
 struct ValidatorInfo {
     id: &'static str,
@@ -197,6 +246,13 @@ pub fn run() {
             workbook_preview,
             plan_import,
             apply_import,
+            list_adapters,
+            list_export_targets,
+            save_export_target,
+            delete_export_target,
+            plan_export,
+            export_to_file,
+            fix_external_key,
             list_validators,
         ])
         .run(tauri::generate_context!())
