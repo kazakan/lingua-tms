@@ -193,6 +193,23 @@ export interface TableConfig {
   include_deprecated: boolean;
 }
 
+/** 외부 명령 어댑터("command")의 설정. 프로토콜은 docs/command-adapter.md */
+export interface CommandConfig {
+  /** {request} 자리에 요청 JSON 파일 경로가 들어간다 */
+  export_command: string;
+  /** 비우면 역가져오기를 지원하지 않는다 */
+  import_command: string;
+  locales: string[];
+  /** 점 없이 */
+  file_extension: string;
+  timeout_secs: number;
+  /** 해석하지 않고 프로그램에 그대로 넘긴다 */
+  options: Record<string, unknown>;
+  key_rule: TableConfig["key_rule"];
+  fallback_to_source: boolean;
+  include_deprecated: boolean;
+}
+
 export interface ExportRow {
   token_id: string;
   token_key: string;

@@ -26,10 +26,13 @@ crates/core           tms-core: SQLite 저장소, 변경 이력, diff, 검증기
   src/values.rs       값 표(토큰명 × 언어 → 값)와 두 표의 diff
   src/import.rs       가져오기 계획(미리보기)·적용(Import 변경 묶음 하나)
   src/export.rs       내보내기 대상, 제품 키 고정, 포맷 어댑터(내보내기·역가져오기), 검증 게이트
+  src/export/command.rs  명령 어댑터: 외부 프로그램에 요청 JSON 을 넘겨 제품 파일을 쓰고 읽게 함
   src/validate/       검증기 레지스트리, 내장 검증기 9종, 제약 해석(resolve), 저장(store), 전체 검증(run)
 crates/measure        tms-measure: Measurer 트레이트 + 엔진 DLL 바인딩(libloading)
 crates/engine-stub    개발용 가짜 엔진 DLL. tms_measure.h 를 Rust로 구현
 engine/include/tms_measure.h   엔진 팀과의 C 인터페이스 계약(ABI 1)
+docs/command-adapter.md        명령 어댑터 프로토콜(요청·응답 JSON, 종료 코드). 사용자용 문서
+examples/command-adapter/      명령 어댑터 예제(CSV, 파이썬판·PowerShell 판). 테스트가 이 예제를 실행한다
 src-tauri/            Tauri 2 앱. 명령(IPC)만 두고 tms-core 를 호출한다
 src/                  화면(React + TypeScript + Vite). api.ts 가 Rust 명령 래퍼
   App.tsx             뼈대(프로젝트 열기, 탭, 오류 띠). 탭: 문구·검증·가져오기·내보내기·이력
@@ -74,11 +77,14 @@ FFI 테스트(`crates/measure/tests/stub_engine.rs`)는 `tms_measure_stub.dll`�
 - CI(`.github/workflows/ci.yml`): main push와 PR마다 Windows에서 `npm run build`, clippy(`-D warnings`), `cargo test --workspace`.
 - 설치 파일은 코드 서명이 없다. 처음 실행할 때 SmartScreen 경고가 뜬다.
 
-## 현재 상태 (2026-11-25)
+## 현재 상태 (2026-11-26)
 
 - 마지막 릴리스 0.1.0(작업 2~6 포함). 0.0.1 은 작업 1(빌드·CI 구성)만 있다.
+- 0.1.0 뒤 main: 명령 어댑터(아래 결정 사항 "제품 내보내기"). 아직 릴리스하지 않았다.
 - Windows 11에서 확인한 것:
-  - `cargo test --workspace` 통과(core 33, engine-stub 2, 스텁 DLL FFI 1), clippy(`-D warnings`) 경고 없음, `npm run build` 성공
+  - `cargo test --workspace` 통과(core 38, engine-stub 2, 스텁 DLL FFI 1), clippy(`-D warnings`) 경고 없음, `npm run build` 성공
+  - 명령 어댑터 테스트는 PowerShell 예제(Windows 에서 항상)와 파이썬 예제(`python`이 없으면 건너뜀)를 실제로 실행한다
+  - 앱에서 명령 어댑터 확인: 파이썬 예제로 CSV 내보내기·키 고정, 실패 명령의 종료 코드·stderr 표시, 역가져오기 미리보기
   - `npm run tauri dev`로 각 탭을 직접 눌러 확인: 표 편집·붙여넣기, 엑셀 가져오기(이전 토큰명 매칭),
     내보내기(키 고정·직접 지정·역가져오기), 검증 규칙·결과·셀 이동·내보내기 차단, 이력(릴리스·되돌리기 충돌·두 시점·파일 비교)
 - 렌더 검증(폭·줄 수)은 아직 화면과 엔진에 연결되지 않았다(후순위). 렌더 규칙은 저장은 되지만 검증에서 건너뛴다.
@@ -111,9 +117,17 @@ FFI 테스트(`crates/measure/tests/stub_engine.rs`)는 `tms_measure_stub.dll`�
 9. `src-tauri`는 얇게 유지한다. 로직은 `tms-core`에 두고 거기서 테스트한다.
    - 명령을 추가하면 `generate_handler!`와 `src/api.ts`를 같이 고친다.
    - 인자 이름은 JS에서 camelCase, Rust에서 snake_case다. Tauri가 자동 변환한다.
+   - 보통 명령은 메인 스레드에서 돌고 `with_project`(기다리지 않음, 바쁘면 바로 오류)를 쓴다.
+     외부 명령을 실행할 수 있는 명령(내보내기, 가져오기 미리보기·적용, 파일 비교)은
+     `#[tauri::command(async)]` + `with_project_wait`로 별도 스레드에서 돈다. 화면이 멈추지 않게 하려는 것이다.
 10. 새 검증기는 `Validator` 트레이트를 구현하고 `Registry::builtin`에 등록한다.
     - `params_schema`(JSON Schema)로 제약 입력 폼이 만들어진다.
     - 검증기 id·파라미터 형식을 바꾸면 `version()`을 올린다.
+11. 명령 어댑터의 요청·응답 형식은 사용자 프로그램과의 계약이다. 바꾸면 아래를 같이 고친다.
+    - `export/command.rs`의 `PROTOCOL_VERSION`
+    - `docs/command-adapter.md`
+    - `examples/command-adapter`의 두 예제(테스트가 실행한다)
+    - 한글이 든 `.ps1`은 UTF-8(BOM 있음)으로 저장한다. Windows PowerShell 5.1 은 BOM 이 없으면 시스템 코드 페이지로 읽는다.
 
 ## 결정 사항 (요약)
 
@@ -135,8 +149,18 @@ FFI 테스트(`crates/measure/tests/stub_engine.rs`)는 `tms_measure_stub.dll`�
   - Dolt 재검토 조건: 브랜치형 번역 작업이 필요해질 때, 이력 대상이 많아져 유지가 부담될 때, 동시 편집이 필요할 때.
 - **제품 내보내기**: TMS 토큰명과 제품 키를 분리한다.
   - `export_target`(제품별 설정)과 `token_external_key`(제품 키 고정 저장)를 쓴다.
-  - 엑셀 형식이 제품마다 달라 포맷 어댑터를 둔다. 기본은 설정형 표이고, 안 맞는 제품은 Rust 전용 어댑터를 쓴다.
+  - 엑셀 형식이 제품마다 달라 포맷 어댑터를 둔다. 기본은 설정형 표(`table`)다.
+    안 맞는 제품은 명령 어댑터(`command`)로 사용자가 만든 프로그램에 맡기거나, Rust 전용 어댑터를 쓴다.
   - 같은 어댑터가 역가져오기도 맡는다.
+  - 명령 어댑터(2026-11-26 결정, 자세한 형식은 `docs/command-adapter.md`):
+    - 파이썬에 한정하지 않고 명령어를 그대로 받는다. 내보내기·역가져오기 명령을 따로 두고, 역가져오기 명령이 비면 미지원.
+    - TMS 는 스크립트를 .tms 에 저장하지 않고, 파이썬 같은 런타임도 넣거나 확인하지 않는다.
+    - 데이터는 임시 JSON 파일(UTF-8)로 주고받는다. 명령의 `{request}` 자리에 요청 파일 경로가 들어간다.
+      stdin/stdout 은 쓰지 않는다(한국어 Windows 의 cp949 파이프 인코딩, print 가 응답을 깨는 문제, 재현이 어려움).
+    - 셸 없이 실행, 작업 폴더는 .tms 폴더, 환경 변수는 그대로, 콘솔 창 숨김.
+    - 종료 코드 0 이 성공. 실패하면 종료 코드 번호와 stderr 끝부분을 보여 주고 실행 기록 폴더(요청·출력)를 남긴다.
+      종료 코드별 설명은 두지 않는다(뜻은 프로그램이 정한다). 출력은 UTF-8 로만 읽는다(시스템 코드 페이지 추측 안 함).
+    - 키 고정·검증 게이트·원문 채우기·이력은 TMS 가 그대로 맡고, 프로그램은 파일 형식만 맡는다.
 - **비교**: 모든 입력(DB 시점, 엑셀 파일)을 토큰 × 언어 → 값 집합으로 바꿔 diff 엔진 하나로 비교한다.
 - **검증**: 검증기(규칙 유형) → 제약(검증기 + 파라미터 + 범위 + 언어 + 심각도) → 결과.
   - 범위는 전역 < 태그 < 토큰 순으로 구체적이고, 같은 범위에서는 언어를 지정한 쪽이 더 구체적이다.
@@ -170,6 +194,7 @@ FFI 테스트(`crates/measure/tests/stub_engine.rs`)는 `tms_measure_stub.dll`�
    - `FormatAdapter` 트레이트, 기본 `table`(설정형 표). 새 Rust 어댑터는 `export::adapters()`에 추가
    - 제품 키: 내보낼 때 규칙으로 제안(겹치면 `_2`)하고 파일 쓰기와 한 트랜잭션으로 고정. 고정 전 직접 지정 가능
    - 역가져오기는 가져오기 탭의 "제품 형식 파일". 고정된 키로만 찾고, "원문으로 채우기"로 들어간 값은 건너뜀
+   - 명령 어댑터(`export/command.rs`, 2026-11-26): 외부 프로그램이 제품 파일을 쓰고 읽는다
 5. ~~**제약과 검증 화면**~~ 완료(`validate/store.rs`, `validate/run.rs`)
    - 제약 저장·삭제(`entity_rev`), 토큰 태그(`tokens::set_tags`). 파라미터 폼은 react-jsonschema-form
    - `validate_all`: 캐시 없이 전체. 미번역 셀은 `checks_missing()` 검증기(`text.required`)만, 렌더 검증기는 건너뜀(개수만 셈)

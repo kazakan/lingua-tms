@@ -15,11 +15,12 @@ import {
 import type { RunFn } from "../App";
 import MappingEditor, { mappingReady, suggestMapping } from "../components/MappingEditor";
 import Change from "../components/Change";
+import { normalizeCommandConfig } from "./ExportView";
 
 export const SHEET_FILTERS = [{ name: "스프레드시트", extensions: ["xlsx", "xlsm", "xlsb", "xls", "ods"] }];
 const MAX_ROWS_SHOWN = 500;
 
-export default function ImportView({ run }: { run: RunFn }) {
+export default function ImportView({ run, projectDir }: { run: RunFn; projectDir: string | null }) {
   const [locales, setLocales] = useState<Locale[]>([]);
   const [targets, setTargets] = useState<ExportTarget[]>([]);
   // mapped: 관리용 엑셀(열 매핑, 토큰명으로 찾음) / target: 제품 형식 파일(내보내기 대상 설정, 제품 키로 찾음)
@@ -31,6 +32,12 @@ export default function ImportView({ run }: { run: RunFn }) {
   const [options, setOptions] = useState<ImportOptions>({ create_missing_tokens: true, clear_empty: false });
   const [plan, setPlan] = useState<ImportPlan | null>(null);
   const [result, setResult] = useState<ImportResult | null>(null);
+  // 미리보기·적용 중(명령 어댑터 대상은 외부 프로그램이 끝날 때까지 걸린다)
+  const [busy, setBusy] = useState(false);
+
+  const target = targets.find((t) => t.id === targetId) ?? null;
+  const command = mode === "target" && target?.adapter === "command" ? normalizeCommandConfig(target.config) : null;
+  const noImportCommand = !!command && command.import_command.trim() === "";
 
   useEffect(() => {
     run(async () => {
@@ -46,6 +53,17 @@ export default function ImportView({ run }: { run: RunFn }) {
 
   const pickFile = () =>
     run(async () => {
+      if (mode === "target") {
+        // 제품 형식 파일은 대상 어댑터가 읽으므로 시트 미리보기는 필요 없다
+        const filters = command
+          ? [{ name: command.file_extension.toUpperCase(), extensions: [command.file_extension] }]
+          : SHEET_FILTERS;
+        const p = await open({ filters, multiple: false, directory: false });
+        if (typeof p !== "string") return;
+        setPath(p);
+        setResult(null);
+        return;
+      }
       const p = await open({ filters: SHEET_FILTERS, multiple: false, directory: false });
       if (typeof p !== "string") return;
       const s = await api.workbookPreview(p);
@@ -60,9 +78,27 @@ export default function ImportView({ run }: { run: RunFn }) {
       ? path && mappingReady(mapping)
         ? { kind: "mapped", path, mapping }
         : null
-      : path && targetId
+      : path && targetId && !noImportCommand
         ? { kind: "target", path, target_id: targetId }
         : null;
+
+  /** 방식이 바뀌면 파일 종류도 달라지므로 고른 파일을 비운다. */
+  const switchMode = (m: "mapped" | "target") => {
+    setMode(m);
+    setPath(null);
+    setSheets([]);
+    setMapping(null);
+    setResult(null);
+  };
+
+  const withBusy = async (f: () => Promise<void>) => {
+    setBusy(true);
+    try {
+      await f();
+    } finally {
+      setBusy(false);
+    }
+  };
 
   return (
     <div className="page">
@@ -72,11 +108,11 @@ export default function ImportView({ run }: { run: RunFn }) {
       <div className="card">
         <div className="row">
           <label>
-            <input type="radio" checked={mode === "mapped"} onChange={() => setMode("mapped")} />
+            <input type="radio" checked={mode === "mapped"} onChange={() => switchMode("mapped")} />
             관리용 엑셀(열을 직접 지정, 토큰명으로 찾음)
           </label>
           <label>
-            <input type="radio" checked={mode === "target"} onChange={() => setMode("target")} />
+            <input type="radio" checked={mode === "target"} onChange={() => switchMode("target")} />
             제품 형식 파일(내보내기 대상 설정으로 읽고, 고정된 제품 키로 찾음)
           </label>
         </div>
@@ -95,9 +131,19 @@ export default function ImportView({ run }: { run: RunFn }) {
             {targets.length === 0 && <span className="notice">내보내기 탭에서 대상을 먼저 만드세요</span>}
           </div>
         )}
+        {command &&
+          (noImportCommand ? (
+            <div className="notice">이 대상은 역가져오기 명령이 없습니다. 내보내기 탭에서 설정하세요.</div>
+          ) : (
+            <div className="muted">
+              읽을 때 실행: <code className="cmd">{command.import_command}</code> · 작업 폴더: {projectDir ?? "(알 수 없음)"}
+            </div>
+          ))}
         <div className="row">
-          <button onClick={pickFile}>파일 선택</button>
-          <span className="path">{path ?? "xlsx, xlsm, xlsb, xls, ods"}</span>
+          <button onClick={pickFile} disabled={noImportCommand}>
+            파일 선택
+          </button>
+          <span className="path">{path ?? (command ? command.file_extension : "xlsx, xlsm, xlsb, xls, ods")}</span>
         </div>
         {mode === "mapped" && mapping && (
           <MappingEditor sheets={sheets} locales={locales} mapping={mapping} onChange={setMapping} />
@@ -127,22 +173,28 @@ export default function ImportView({ run }: { run: RunFn }) {
             </label>
           </div>
           <div className="row">
-            <button disabled={!source} onClick={() => source && run(async () => setPlan(await api.planImport(source, options)))}>
+            <button
+              disabled={!source || busy}
+              onClick={() => source && run(() => withBusy(async () => setPlan(await api.planImport(source, options))))}
+            >
               미리보기
             </button>
             <button
               className="primary"
-              disabled={!source || !plan || (plan.changes.length === 0 && plan.new_tokens.length === 0)}
+              disabled={!source || busy || !plan || (plan.changes.length === 0 && plan.new_tokens.length === 0)}
               onClick={() =>
                 source &&
-                run(async () => {
-                  setResult(await api.applyImport(source, options));
-                  setPlan(null);
-                })
+                run(() =>
+                  withBusy(async () => {
+                    setResult(await api.applyImport(source, options));
+                    setPlan(null);
+                  }),
+                )
               }
             >
               적용
             </button>
+            {busy && <span className="muted">실행 중…</span>}
             {result && (
               <span>
                 {result.changeset_id == null

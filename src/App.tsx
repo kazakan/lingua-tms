@@ -59,6 +59,8 @@ export default function App() {
     setTab("strings");
   }, []);
   const focusDone = useCallback(() => setFocus(null), []);
+  // .tms 파일이 있는 폴더: 명령 어댑터의 작업 폴더
+  const projectDir = project ? project.path.replace(/[\\/][^\\/]*$/, "") : null;
 
   return (
     <div className="app">
@@ -89,8 +91,8 @@ export default function App() {
         <main className="view" key={epoch}>
           {tab === "strings" && <StringsView run={run} focus={focus} onFocusDone={focusDone} />}
           {tab === "validation" && <ValidationView run={run} onOpenCell={openCell} />}
-          {tab === "import" && <ImportView run={run} />}
-          {tab === "export" && <ExportView run={run} />}
+          {tab === "import" && <ImportView run={run} projectDir={projectDir} />}
+          {tab === "export" && <ExportView run={run} projectDir={projectDir} />}
           {tab === "history" && <HistoryView run={run} onOpenCell={openCell} />}
         </main>
       )}

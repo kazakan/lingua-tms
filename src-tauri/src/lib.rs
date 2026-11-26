@@ -2,7 +2,7 @@
 //! 로직이 생기면 tms-core 로 옮기고 거기서 테스트한다.
 
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Mutex, MutexGuard, TryLockError};
 
 use serde::Serialize;
 use serde_json::Value;
@@ -30,8 +30,25 @@ fn err(e: impl std::fmt::Display) -> String {
     e.to_string()
 }
 
+/// 프로젝트를 잡는다. 대부분의 명령은 메인 스레드에서 도므로 기다리지 않는다:
+/// 외부 명령을 실행하는 작업이 프로젝트를 잡고 있으면 화면이 멈추지 않게 바로 오류를 돌려준다.
+fn lock_now(state: &AppState) -> CmdResult<MutexGuard<'_, Option<Project>>> {
+    match state.project.try_lock() {
+        Ok(guard) => Ok(guard),
+        Err(TryLockError::WouldBlock) => Err("다른 작업(외부 명령 실행 등)이 진행 중입니다. 끝난 뒤 다시 시도하세요".into()),
+        Err(TryLockError::Poisoned(e)) => Err(err(e)),
+    }
+}
+
 /// 열린 프로젝트 연결로 작업한다. 열린 프로젝트가 없으면 오류.
 fn with_project<T>(state: &AppState, f: impl FnOnce(&mut Connection) -> tms_core::Result<T>) -> CmdResult<T> {
+    let mut guard = lock_now(state)?;
+    let project = guard.as_mut().ok_or("열린 프로젝트가 없음")?;
+    f(&mut project.conn).map_err(err)
+}
+
+/// 외부 명령을 실행할 수 있는 명령용(`#[tauri::command(async)]`로 별도 스레드에서 돈다). 프로젝트가 비기를 기다린다.
+fn with_project_wait<T>(state: &AppState, f: impl FnOnce(&mut Connection) -> tms_core::Result<T>) -> CmdResult<T> {
     let mut guard = state.project.lock().map_err(err)?;
     let project = guard.as_mut().ok_or("열린 프로젝트가 없음")?;
     f(&mut project.conn).map_err(err)
@@ -48,7 +65,7 @@ struct ProjectInfo {
 fn open_project(state: State<'_, AppState>, path: String) -> CmdResult<ProjectInfo> {
     let conn = db::open(&path).map_err(err)?;
     let schema_version = db::schema_version(&conn).map_err(err)?;
-    *state.project.lock().map_err(err)? = Some(Project {
+    *lock_now(&state)? = Some(Project {
         path: PathBuf::from(&path),
         conn,
     });
@@ -57,7 +74,7 @@ fn open_project(state: State<'_, AppState>, path: String) -> CmdResult<ProjectIn
 
 #[tauri::command]
 fn project_info(state: State<'_, AppState>) -> CmdResult<Option<ProjectInfo>> {
-    let guard = state.project.lock().map_err(err)?;
+    let guard = lock_now(&state)?;
     guard
         .as_ref()
         .map(|p| {
@@ -119,20 +136,20 @@ fn workbook_preview(path: String) -> CmdResult<Vec<sheet::SheetPreview>> {
     sheet::workbook_preview(Path::new(&path), 30).map_err(err)
 }
 
-/// 가져오기 미리보기. DB는 바꾸지 않는다.
-#[tauri::command]
+/// 가져오기 미리보기. DB는 바꾸지 않는다. 제품 형식 파일은 외부 명령을 실행할 수 있어 별도 스레드에서 돈다.
+#[tauri::command(async)]
 fn plan_import(state: State<'_, AppState>, source: ImportSource, options: ImportOptions) -> CmdResult<ImportPlan> {
-    with_project(&state, |conn| {
+    with_project_wait(&state, |conn| {
         let table = source.load(conn)?;
         import::plan_import(conn, &table, &options)
     })
 }
 
 /// 가져오기 적용(변경 묶음 하나).
-#[tauri::command]
+#[tauri::command(async)]
 fn apply_import(state: State<'_, AppState>, source: ImportSource, options: ImportOptions) -> CmdResult<ImportResult> {
     let author = state.author.clone();
-    with_project(&state, |conn| {
+    with_project_wait(&state, |conn| {
         let table = source.load(conn)?;
         import::apply_import(conn, &author, &table, &options, &source.label())
     })
@@ -183,9 +200,9 @@ fn rollback_to(state: State<'_, AppState>, changeset_id: i64) -> CmdResult<Optio
 }
 
 /// 파일 두 개 비교(관리용 엑셀·제품 형식 모두). a → b 로 바뀐 칸.
-#[tauri::command]
+#[tauri::command(async)]
 fn compare_sources(state: State<'_, AppState>, a: ImportSource, b: ImportSource) -> CmdResult<Vec<values::ValueDiff>> {
-    with_project(&state, |conn| Ok(values::diff_tables(&a.load(conn)?, &b.load(conn)?)))
+    with_project_wait(&state, |conn| Ok(values::diff_tables(&a.load(conn)?, &b.load(conn)?)))
 }
 
 #[tauri::command]
@@ -223,7 +240,8 @@ fn check_export(state: State<'_, AppState>, target_id: String) -> CmdResult<expo
 }
 
 /// 파일로 내보내고 새 제품 키를 고정한다. 검증 error 가 있으면 거부, warning 이 있으면 note(사유) 필요.
-#[tauri::command]
+/// 명령 어댑터는 외부 명령을 실행하므로 별도 스레드에서 돈다.
+#[tauri::command(async)]
 fn export_to_file(
     state: State<'_, AppState>,
     target_id: String,
@@ -231,7 +249,7 @@ fn export_to_file(
     note: Option<String>,
 ) -> CmdResult<export::ExportReport> {
     let author = state.author.clone();
-    with_project(&state, |conn| {
+    with_project_wait(&state, |conn| {
         export::export_to_file(conn, &author, &state.registry, &target_id, Path::new(&path), note.as_deref())
     })
 }

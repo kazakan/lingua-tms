@@ -85,6 +85,17 @@ body {
   border-bottom: 1px solid #fecaca;
   cursor: pointer;
   white-space: pre-wrap;
+  max-height: 40vh;
+  overflow: auto;
+}
+
+/* 실행할 외부 명령 */
+code.cmd {
+  font-family: Consolas, monospace;
+  background: #f1f5f9;
+  padding: 1px 4px;
+  border-radius: 3px;
+  word-break: break-all;
 }
 
 /* ── 공통 입력 ─────────────────────────── */

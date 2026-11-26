@@ -1,13 +1,16 @@
 //! 제품 내보내기와 포맷 어댑터.
 //!
 //! - 내보내기 대상(`export_target`)마다 포맷 어댑터와 설정(JSON)이 있다. 기본 어댑터는 설정형 표(`table`).
-//!   형식이 안 맞는 제품은 [`FormatAdapter`]를 구현한 Rust 어댑터를 [`adapter`]에 추가한다.
+//!   형식이 안 맞는 제품은 외부 명령 어댑터(`command`, [`command`] 모듈)로 사용자가 만든 프로그램에 맡기거나,
+//!   [`FormatAdapter`]를 구현한 Rust 어댑터를 [`adapters`]에 추가한다.
 //! - 제품 키(`token_external_key`)는 처음 내보낼 때 정해져 고정된다. 규칙(접두어 등)은 아직 키가 없는
 //!   토큰의 제안에만 쓴다. 고정 전에 키를 직접 지정할 수도 있다([`fix_external_key`]).
 //! - 같은 어댑터가 제품 형식 파일을 다시 읽는다(역가져오기). 토큰은 고정된 제품 키로만 찾는다.
 
+pub mod command;
+
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
 use serde::{Deserialize, Serialize};
@@ -393,7 +396,8 @@ pub fn export_to_file(
     } else {
         None
     };
-    adapter.write(&preview.target.config, &preview.rows, path)?;
+    let ctx = AdapterContext::new(&tx, &preview.target);
+    adapter.write(&ctx, &preview.rows, path)?;
     tx.commit()?;
     Ok(ExportReport {
         rows: preview.rows.len(),
@@ -411,7 +415,7 @@ pub fn read_target_file(conn: &Connection, target_id: &str, path: &Path) -> Resu
     let target = get_target(conn, target_id)?;
     let adapter = adapter(&target.adapter)?;
     let opts = adapter.options(&target.config)?;
-    let rows = adapter.read(&target.config, path)?;
+    let rows = adapter.read(&AdapterContext::new(conn, &target), path)?;
     let by_key: HashMap<String, String> = fixed_keys(conn, target_id)?
         .into_iter()
         .map(|(token, key)| (key, token))
@@ -460,14 +464,33 @@ pub struct ExternalRow {
     pub values: Vec<(String, String)>,
 }
 
+/// 파일을 쓰고 읽을 때 어댑터에 넘기는 정보.
+pub struct AdapterContext<'a> {
+    /// 설정은 `target.config`.
+    pub target: &'a ExportTarget,
+    /// 프로젝트(.tms) 파일이 있는 폴더. 외부 명령의 작업 폴더가 된다. 메모리 DB 면 None.
+    pub project_dir: Option<PathBuf>,
+}
+
+impl<'a> AdapterContext<'a> {
+    pub fn new(conn: &Connection, target: &'a ExportTarget) -> Self {
+        let project_dir = conn
+            .path()
+            .filter(|p| !p.is_empty())
+            .and_then(|p| Path::new(p).parent())
+            .map(Path::to_path_buf);
+        Self { target, project_dir }
+    }
+}
+
 pub trait FormatAdapter: Send + Sync {
     fn id(&self) -> &'static str;
     fn description(&self) -> &'static str;
     /// 설정이 맞는지 확인한다. `locales`는 프로젝트에 있는 언어 코드.
     fn check_config(&self, config: &Value, locales: &HashSet<String>) -> Result<()>;
     fn options(&self, config: &Value) -> Result<AdapterOptions>;
-    fn write(&self, config: &Value, rows: &[ExportRow], path: &Path) -> Result<()>;
-    fn read(&self, config: &Value, path: &Path) -> Result<Vec<ExternalRow>>;
+    fn write(&self, ctx: &AdapterContext, rows: &[ExportRow], path: &Path) -> Result<()>;
+    fn read(&self, ctx: &AdapterContext, path: &Path) -> Result<Vec<ExternalRow>>;
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -477,10 +500,11 @@ pub struct AdapterInfo {
 }
 
 static TABLE: TableAdapter = TableAdapter;
+static COMMAND: command::CommandAdapter = command::CommandAdapter;
 
 /// 어댑터 목록. 새 Rust 어댑터는 여기에 추가한다.
 pub fn adapters() -> Vec<&'static dyn FormatAdapter> {
-    vec![&TABLE]
+    vec![&TABLE, &COMMAND]
 }
 
 pub fn adapter(id: &str) -> Result<&'static dyn FormatAdapter> {
@@ -587,9 +611,9 @@ impl FormatAdapter for TableAdapter {
         })
     }
 
-    fn write(&self, config: &Value, rows: &[ExportRow], path: &Path) -> Result<()> {
+    fn write(&self, ctx: &AdapterContext, rows: &[ExportRow], path: &Path) -> Result<()> {
         use rust_xlsxwriter::{Format, Workbook};
-        let c = Self::config(config)?;
+        let c = Self::config(&ctx.target.config)?;
         let mut wb = Workbook::new();
         let ws = wb.add_worksheet().set_name(&c.sheet_name)?;
         let bold = Format::new().set_bold();
@@ -614,8 +638,8 @@ impl FormatAdapter for TableAdapter {
         Ok(())
     }
 
-    fn read(&self, config: &Value, path: &Path) -> Result<Vec<ExternalRow>> {
-        let c = Self::config(config)?;
+    fn read(&self, ctx: &AdapterContext, path: &Path) -> Result<Vec<ExternalRow>> {
+        let c = Self::config(&ctx.target.config)?;
         let rows = sheet::read_sheet(path, &c.sheet_name)?;
         // 머리글 행: 키 열 머리글이 처음 나오는 행
         let (header_row, key_col) = rows
@@ -728,7 +752,8 @@ mod tests {
         assert!(delete_target(&mut conn, "t", &target).is_err());
 
         // 역가져오기: 내보낸 파일을 고쳐 다시 읽으면 제품 키로 토큰을 찾는다
-        let rows = TABLE.read(&get_target(&conn, &target).unwrap().config, &path).unwrap();
+        let t = get_target(&conn, &target).unwrap();
+        let rows = TABLE.read(&AdapterContext::new(&conn, &t), &path).unwrap();
         assert_eq!(rows.len(), 2);
         let table = read_target_file(&conn, &target, &path).unwrap();
         assert_eq!(table.keys, vec!["common.ok", "home.header"]);

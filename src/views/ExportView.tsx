@@ -5,6 +5,7 @@ import { ask, save } from "@tauri-apps/plugin-dialog";
 import {
   api,
   type AdapterInfo,
+  type CommandConfig,
   type ExportCheck,
   type ExportIssue,
   type ExportPreview,
@@ -50,7 +51,45 @@ function normalizeTableConfig(raw: unknown): TableConfig {
   };
 }
 
-export default function ExportView({ run }: { run: RunFn }) {
+export function defaultCommandConfig(locales: Locale[]): CommandConfig {
+  return {
+    export_command: "",
+    import_command: "",
+    locales: locales.map((l) => l.code),
+    file_extension: "xlsx",
+    timeout_secs: 60,
+    options: {},
+    key_rule: { prefix: "", case: "keep", dot_replacement: null },
+    fallback_to_source: false,
+    include_deprecated: false,
+  };
+}
+
+/** 빠진 필드는 서버 기본값과 같은 값으로 채운다. */
+export function normalizeCommandConfig(raw: unknown): CommandConfig {
+  const d = defaultCommandConfig([]);
+  const c = (raw ?? {}) as Partial<CommandConfig>;
+  return {
+    ...d,
+    ...c,
+    locales: c.locales ?? [],
+    options: c.options ?? {},
+    key_rule: { ...d.key_rule, ...(c.key_rule ?? {}), dot_replacement: c.key_rule?.dot_replacement ?? null },
+  };
+}
+
+function defaultConfig(adapter: string, locales: Locale[]): unknown {
+  if (adapter === "table") return defaultTableConfig(locales);
+  if (adapter === "command") return defaultCommandConfig(locales);
+  return {};
+}
+
+/** 대상의 제품 파일 확장자(파일 대화상자용). */
+export function targetFileExtension(target: { adapter: string; config: unknown }): string {
+  return target.adapter === "command" ? normalizeCommandConfig(target.config).file_extension || "xlsx" : "xlsx";
+}
+
+export default function ExportView({ run, projectDir }: { run: RunFn; projectDir: string | null }) {
   const [locales, setLocales] = useState<Locale[]>([]);
   const [adapters, setAdapters] = useState<AdapterInfo[]>([]);
   const [targets, setTargets] = useState<ExportTarget[]>([]);
@@ -59,6 +98,11 @@ export default function ExportView({ run }: { run: RunFn }) {
   const [check, setCheck] = useState<ExportCheck | null>(null);
   const [reason, setReason] = useState("");
   const [message, setMessage] = useState<string | null>(null);
+  // 내보내는 중(명령 어댑터는 외부 프로그램이 끝날 때까지 걸린다)
+  const [busy, setBusy] = useState(false);
+
+  const saved = targets.find((t) => t.id === draft?.id);
+  const dirty = !!draft && !!saved && stableJson(saved) !== stableJson(draft);
 
   const loadTargets = useCallback(async () => setTargets(await api.listExportTargets()), []);
 
@@ -107,17 +151,28 @@ export default function ExportView({ run }: { run: RunFn }) {
 
   const exportFile = () =>
     draft?.id &&
+    saved &&
     run(async () => {
-      const path = await save({ filters: [{ name: "Excel", extensions: ["xlsx"] }], defaultPath: `${draft.name}.xlsx` });
+      // 내보내기는 저장된 설정으로 한다
+      const ext = targetFileExtension(saved);
+      const path = await save({
+        filters: [{ name: ext.toUpperCase(), extensions: [ext] }],
+        defaultPath: `${saved.name}.${ext}`,
+      });
       if (typeof path !== "string") return;
-      const r = await api.exportToFile(draft.id!, path, reason.trim() || null);
-      setMessage(`${r.rows}행을 내보냄. 새로 고정한 제품 키 ${r.new_keys}개${r.changeset_id ? ` (변경 묶음 #${r.changeset_id})` : ""}`);
-      setReason("");
-      await loadPreview(draft.id!);
+      setMessage(null);
+      setBusy(true);
+      try {
+        const r = await api.exportToFile(saved.id, path, reason.trim() || null);
+        setMessage(`${r.rows}행을 내보냄. 새로 고정한 제품 키 ${r.new_keys}개${r.changeset_id ? ` (변경 묶음 #${r.changeset_id})` : ""}`);
+        setReason("");
+      } finally {
+        setBusy(false);
+      }
+      await loadPreview(saved.id);
     });
 
-  const saved = targets.find((t) => t.id === draft?.id);
-  const dirty = !!draft && !!saved && stableJson(saved) !== stableJson(draft);
+  const savedCommand = saved?.adapter === "command" ? normalizeCommandConfig(saved.config).export_command : null;
 
   return (
     <div className="split">
@@ -160,7 +215,7 @@ export default function ExportView({ run }: { run: RunFn }) {
                     setDraft({
                       ...draft,
                       adapter: e.target.value,
-                      config: e.target.value === "table" ? defaultTableConfig(locales) : {},
+                      config: defaultConfig(e.target.value, locales),
                     })
                   }
                 >
@@ -177,8 +232,20 @@ export default function ExportView({ run }: { run: RunFn }) {
                   locales={locales}
                   onChange={(config) => setDraft({ ...draft, config })}
                 />
+              ) : draft.adapter === "command" ? (
+                <CommandConfigEditor
+                  key={draft.id ?? "new"}
+                  config={normalizeCommandConfig(draft.config)}
+                  locales={locales}
+                  projectDir={projectDir}
+                  onChange={(config) => setDraft({ ...draft, config })}
+                />
               ) : (
-                <JsonConfigEditor value={draft.config} onChange={(config) => setDraft({ ...draft, config })} />
+                <JsonConfigEditor
+                  key={`${draft.id ?? "new"}:${draft.adapter}`}
+                  value={draft.config}
+                  onChange={(config) => setDraft({ ...draft, config })}
+                />
               )}
               <div className="row">
                 <button className="primary" onClick={saveDraft}>
@@ -198,7 +265,12 @@ export default function ExportView({ run }: { run: RunFn }) {
             {preview && draft.id && (
               <PreviewCard
                 preview={preview}
-                canExport={!!check && check.errors.length === 0 && (check.warnings.length === 0 || reason.trim() !== "")}
+                canExport={
+                  !busy && !!check && check.errors.length === 0 && (check.warnings.length === 0 || reason.trim() !== "")
+                }
+                busy={busy}
+                command={savedCommand}
+                workDir={projectDir}
                 onExport={exportFile}
                 onFixKey={(row, key) =>
                   run(async () => {
@@ -225,7 +297,6 @@ function TableConfigEditor({
   onChange: (c: TableConfig) => void;
 }) {
   const set = <K extends keyof TableConfig>(k: K, v: TableConfig[K]) => onChange({ ...config, [k]: v });
-  const rule = config.key_rule;
   return (
     <>
       <div className="field">
@@ -272,84 +343,188 @@ function TableConfigEditor({
             열 추가
           </button>
         </div>
-        <span>제품 키 규칙</span>
-        <div className="row">
-          <input
-            placeholder="접두어"
-            value={rule.prefix}
-            style={{ width: 100 }}
-            onChange={(e) => set("key_rule", { ...rule, prefix: e.target.value })}
-          />
-          <select
-            value={rule.case}
-            onChange={(e) => set("key_rule", { ...rule, case: e.target.value as TableConfig["key_rule"]["case"] })}
-          >
-            <option value="keep">대소문자 그대로</option>
-            <option value="upper">대문자로</option>
-            <option value="lower">소문자로</option>
-          </select>
-          <label>
-            <input
-              type="checkbox"
-              checked={rule.dot_replacement != null}
-              onChange={(e) => set("key_rule", { ...rule, dot_replacement: e.target.checked ? "_" : null })}
-            />
-            '.'을 바꾸기
-          </label>
-          {rule.dot_replacement != null && (
-            <input
-              value={rule.dot_replacement}
-              style={{ width: 40 }}
-              onChange={(e) => set("key_rule", { ...rule, dot_replacement: e.target.value })}
-            />
-          )}
-          <span className="muted">아직 키가 없는 토큰에만 씁니다. 한 번 내보낸 키는 바뀌지 않습니다.</span>
-        </div>
-        <span>옵션</span>
-        <div className="row">
-          <label>
-            <input
-              type="checkbox"
-              checked={config.fallback_to_source}
-              onChange={(e) => set("fallback_to_source", e.target.checked)}
-            />
-            번역이 없으면 원문으로 채우기
-          </label>
-          <label>
-            <input
-              type="checkbox"
-              checked={config.include_deprecated}
-              onChange={(e) => set("include_deprecated", e.target.checked)}
-            />
-            사용 중지(deprecated) 토큰도 내보내기
-          </label>
-        </div>
+        <KeyRuleFields value={config} onChange={(patch) => onChange({ ...config, ...patch })} />
       </div>
     </>
   );
 }
 
-/** 표 어댑터가 아닌 Rust 전용 어댑터의 설정은 JSON 으로 고친다. */
-function JsonConfigEditor({ value, onChange }: { value: unknown; onChange: (v: unknown) => void }) {
+type CommonOptions = Pick<TableConfig, "key_rule" | "fallback_to_source" | "include_deprecated">;
+
+/** 제품 키 규칙과 공통 옵션(표·명령 어댑터 공통). .field 격자 안에 넣는다. */
+function KeyRuleFields({ value, onChange }: { value: CommonOptions; onChange: (patch: Partial<CommonOptions>) => void }) {
+  const rule = value.key_rule;
+  return (
+    <>
+      <span>제품 키 규칙</span>
+      <div className="row">
+        <input
+          placeholder="접두어"
+          value={rule.prefix}
+          style={{ width: 100 }}
+          onChange={(e) => onChange({ key_rule: { ...rule, prefix: e.target.value } })}
+        />
+        <select
+          value={rule.case}
+          onChange={(e) => onChange({ key_rule: { ...rule, case: e.target.value as TableConfig["key_rule"]["case"] } })}
+        >
+          <option value="keep">대소문자 그대로</option>
+          <option value="upper">대문자로</option>
+          <option value="lower">소문자로</option>
+        </select>
+        <label>
+          <input
+            type="checkbox"
+            checked={rule.dot_replacement != null}
+            onChange={(e) => onChange({ key_rule: { ...rule, dot_replacement: e.target.checked ? "_" : null } })}
+          />
+          '.'을 바꾸기
+        </label>
+        {rule.dot_replacement != null && (
+          <input
+            value={rule.dot_replacement}
+            style={{ width: 40 }}
+            onChange={(e) => onChange({ key_rule: { ...rule, dot_replacement: e.target.value } })}
+          />
+        )}
+        <span className="muted">아직 키가 없는 토큰에만 씁니다. 한 번 내보낸 키는 바뀌지 않습니다.</span>
+      </div>
+      <span>옵션</span>
+      <div className="row">
+        <label>
+          <input
+            type="checkbox"
+            checked={value.fallback_to_source}
+            onChange={(e) => onChange({ fallback_to_source: e.target.checked })}
+          />
+          번역이 없으면 원문으로 채우기
+        </label>
+        <label>
+          <input
+            type="checkbox"
+            checked={value.include_deprecated}
+            onChange={(e) => onChange({ include_deprecated: e.target.checked })}
+          />
+          사용 중지(deprecated) 토큰도 내보내기
+        </label>
+      </div>
+    </>
+  );
+}
+
+/** 외부 명령 어댑터 설정. 요청·응답 형식은 docs/command-adapter.md */
+function CommandConfigEditor({
+  config,
+  locales,
+  projectDir,
+  onChange,
+}: {
+  config: CommandConfig;
+  locales: Locale[];
+  projectDir: string | null;
+  onChange: (c: CommandConfig) => void;
+}) {
+  const set = <K extends keyof CommandConfig>(k: K, v: CommandConfig[K]) => onChange({ ...config, [k]: v });
+  const mono = { fontFamily: "Consolas, monospace", width: "100%" };
+  const unused = locales.find((l) => !config.locales.includes(l.code));
+  return (
+    <div className="field">
+      <span>내보내기 명령</span>
+      <input
+        style={mono}
+        placeholder="예: python scripts/product.py export {request}"
+        value={config.export_command}
+        onChange={(e) => set("export_command", e.target.value)}
+      />
+      <span>역가져오기 명령</span>
+      <input
+        style={mono}
+        placeholder="비우면 역가져오기를 하지 않음. 예: python scripts/product.py import {request}"
+        value={config.import_command}
+        onChange={(e) => set("import_command", e.target.value)}
+      />
+      <span />
+      <div className="muted">
+        {"{request}"} 자리에 요청 JSON 파일 경로가 들어갑니다. 셸 없이 실행하고, 작업 폴더는{" "}
+        {projectDir ?? ".tms 파일이 있는 폴더"}입니다. 종료 코드 0이 성공입니다. 형식: docs/command-adapter.md
+      </div>
+      <span>언어</span>
+      <div>
+        {config.locales.map((code, i) => (
+          <div className="row" key={i}>
+            <select
+              value={code}
+              onChange={(e) => set("locales", config.locales.map((x, j) => (j === i ? e.target.value : x)))}
+            >
+              {locales.map((l) => (
+                <option key={l.code} value={l.code}>
+                  {l.name} ({l.code})
+                </option>
+              ))}
+            </select>
+            <button onClick={() => set("locales", config.locales.filter((_, j) => j !== i))}>빼기</button>
+          </div>
+        ))}
+        <button
+          disabled={locales.length === 0}
+          onClick={() => set("locales", [...config.locales, (unused ?? locales[0]).code])}
+        >
+          언어 추가
+        </button>
+      </div>
+      <span>파일 확장자</span>
+      <div className="row">
+        <input
+          style={{ width: 80 }}
+          value={config.file_extension}
+          onChange={(e) => set("file_extension", e.target.value)}
+        />
+        <span>시간 제한</span>
+        <input
+          type="number"
+          min={1}
+          max={3600}
+          style={{ width: 80 }}
+          value={config.timeout_secs}
+          onChange={(e) => set("timeout_secs", Number(e.target.value))}
+        />
+        <span>초</span>
+      </div>
+      <span>options (JSON)</span>
+      <JsonText rows={3} value={config.options} onChange={(v) => set("options", v as Record<string, unknown>)} />
+      <KeyRuleFields value={config} onChange={(patch) => onChange({ ...config, ...patch })} />
+    </div>
+  );
+}
+
+/** JSON 입력칸. JSON 으로 읽히면 onChange 를 부르고, 아니면 테두리를 빨갛게 한다. */
+function JsonText({ value, onChange, rows }: { value: unknown; onChange: (v: unknown) => void; rows: number }) {
   const [text, setText] = useState(JSON.stringify(value, null, 2));
   const [bad, setBad] = useState(false);
   return (
+    <textarea
+      rows={rows}
+      value={text}
+      style={{ fontFamily: "monospace", width: "100%", borderColor: bad ? "#dc2626" : undefined }}
+      onChange={(e) => {
+        setText(e.target.value);
+        try {
+          onChange(JSON.parse(e.target.value));
+          setBad(false);
+        } catch {
+          setBad(true);
+        }
+      }}
+    />
+  );
+}
+
+/** 표·명령 어댑터가 아닌 Rust 전용 어댑터의 설정은 JSON 으로 고친다. */
+function JsonConfigEditor({ value, onChange }: { value: unknown; onChange: (v: unknown) => void }) {
+  return (
     <div className="field">
       <span>설정(JSON)</span>
-      <textarea
-        rows={10}
-        value={text}
-        style={{ fontFamily: "monospace", borderColor: bad ? "#dc2626" : undefined }}
-        onChange={(e) => {
-          setText(e.target.value);
-          try {
-            onChange(JSON.parse(e.target.value));
-            setBad(false);
-          } catch {
-            setBad(true);
-          }
-        }}
-      />
+      <JsonText rows={10} value={value} onChange={onChange} />
     </div>
   );
 }
@@ -400,11 +575,18 @@ function GateCard({ check, reason, onReason }: { check: ExportCheck; reason: str
 function PreviewCard({
   preview,
   canExport,
+  busy,
+  command,
+  workDir,
   onExport,
   onFixKey,
 }: {
   preview: ExportPreview;
   canExport: boolean;
+  busy: boolean;
+  /** 명령 어댑터면 내보낼 때 실행할 명령(남에게 받은 .tms 라면 무엇이 실행되는지 보이게) */
+  command: string | null;
+  workDir: string | null;
   onExport: () => void;
   onFixKey: (row: ExportRow, key: string) => void;
 }) {
@@ -423,9 +605,14 @@ function PreviewCard({
         </span>
         <input placeholder="키·토큰 찾기" value={filter} onChange={(e) => setFilter(e.target.value)} />
         <button className="primary" style={{ marginLeft: "auto" }} disabled={!canExport} onClick={onExport}>
-          파일로 내보내기
+          {busy ? "명령 실행 중…" : "파일로 내보내기"}
         </button>
       </div>
+      {command && (
+        <div className="muted" style={{ marginBottom: 6 }}>
+          내보낼 때 실행: <code className="cmd">{command}</code> · 작업 폴더: {workDir ?? "(알 수 없음)"}
+        </div>
+      )}
       <div className="table-scroll">
         <table className="table">
           <thead>

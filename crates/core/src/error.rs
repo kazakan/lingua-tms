@@ -11,6 +11,11 @@ pub enum Error {
     /// 엑셀·ODS 읽기 또는 쓰기 실패.
     #[error("스프레드시트 오류: {0}")]
     Sheet(String),
+    #[error("파일 오류: {0}")]
+    Io(#[from] std::io::Error),
+    /// 외부 명령(명령 어댑터) 실패. 메시지에 종료 코드, 출력 끝부분, 실행 기록 폴더가 들어 있다.
+    #[error("{0}")]
+    Command(String),
 }
 
 impl From<calamine::Error> for Error {
