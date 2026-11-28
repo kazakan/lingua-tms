@@ -80,10 +80,10 @@ FFI 테스트(`crates/measure/tests/stub_engine.rs`, `crates/core/tests/render_s
 - CI(`.github/workflows/ci.yml`): main push와 PR마다 Windows에서 `npm run build`, clippy(`-D warnings`), `cargo test --workspace`.
 - 설치 파일은 코드 서명이 없다. 처음 실행할 때 SmartScreen 경고가 뜬다.
 
-## 현재 상태 (2026-11-27)
+## 현재 상태 (2026-11-28)
 
-- 마지막 릴리스 0.1.0(작업 2~6 포함). 0.0.1 은 작업 1(빌드·CI 구성)만 있다.
-- 0.1.0 뒤 main: 명령 어댑터(아래 결정 사항 "제품 내보내기"), 렌더 연결(작업 7). 아직 릴리스하지 않았다.
+- 마지막 릴리스 0.2.0: 명령 어댑터(아래 결정 사항 "제품 내보내기"), 렌더 연결(작업 7).
+- 이전 릴리스: 0.1.0 은 작업 2~6, 0.0.1 은 작업 1(빌드·CI 구성)만 있다.
 - Windows 11에서 확인한 것:
   - `cargo test --workspace` 통과(core 44, 스텁 DLL 렌더 경로 1, engine-stub 2, 스텁 DLL FFI 1),
     clippy(`-D warnings`) 경고 없음, `npm run build` 성공
