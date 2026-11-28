@@ -1,14 +1,18 @@
 //! 전체 검증: 모든 셀(사용 중인 토큰 × 언어)에 유효 제약을 실행한다. 캐시 없이 매번 전체를 본다.
 //!
 //! - 미번역 셀은 `checks_missing()`인 검증기(`text.required`)만 검사한다.
-//! - 렌더 검증기는 측정 엔진 연결(후순위) 전까지 실행하지 않고 건너뛴 수만 센다.
+//! - 렌더 검증기는 제약의 렌더 프로필로 엔진에서 잰다. 이 PC 에서 엔진 DLL 을 쓸 수 없으면
+//!   건너뛰고 수와 이유를 보고한다. 프로필 설정이 잘못됐으면 검증기 오류로 보고한다.
 //! - 결과에는 위반(fail)이거나 검증기 자체가 실패한 항목이 있는 셀만 담는다.
+
+use std::collections::BTreeSet;
 
 use rusqlite::Connection;
 use serde::Serialize;
 
 use super::{effective_constraints, load_constraints, Finding, Registry, Severity, TextCtx, Verdict};
 use crate::model::CellKey;
+use crate::render::{EngineSet, RenderSession, SetupError};
 use crate::tokens::{list_locales, list_tokens, source_locale};
 use crate::{history, Result};
 
@@ -31,7 +35,7 @@ pub struct ValidationSummary {
     pub info: usize,
     /// 검증기 자체가 실패한 검사(파라미터 오류 등).
     pub broken: usize,
-    /// 측정 엔진이 없어 건너뛴 렌더 검사.
+    /// 측정 엔진을 쓸 수 없어 건너뛴 렌더 검사.
     pub skipped_render: usize,
 }
 
@@ -39,13 +43,21 @@ pub struct ValidationSummary {
 pub struct ValidationReport {
     pub cells: Vec<CellFindings>,
     pub summary: ValidationSummary,
+    /// 렌더 검사를 건너뛴 이유(중복 없이).
+    pub render_skipped: Vec<String>,
+    /// 렌더 검사를 건너뛴 셀(토큰 id, 언어). 내보내기 게이트가 쓴다. 화면에는 보내지 않는다.
+    #[serde(skip)]
+    pub skipped_cells: Vec<(String, String)>,
 }
 
-pub fn validate_all(conn: &Connection, registry: &Registry) -> Result<ValidationReport> {
+/// `engines`가 None 이면 렌더 검사는 모두 건너뛴다.
+pub fn validate_all(conn: &Connection, registry: &Registry, engines: Option<&mut EngineSet>) -> Result<ValidationReport> {
     let constraints = load_constraints(conn)?;
     let locales = list_locales(conn)?;
     let source = source_locale(conn)?;
     let now = history::current(conn)?;
+    let mut render = RenderSession::new(conn, engines)?;
+    let mut skipped_reasons = BTreeSet::new();
     let mut report = ValidationReport::default();
     let s = &mut report.summary;
 
@@ -60,23 +72,13 @@ pub fn validate_all(conn: &Connection, registry: &Registry) -> Result<Validation
             let value = value_of(&locale.code);
             let mut findings = Vec::new();
             for c in effective_constraints(&constraints, &token.id, &token.tags, &locale.code) {
-                let mut finding = Finding {
-                    constraint_id: c.id.clone(),
-                    validator: c.validator.clone(),
-                    severity: c.severity,
-                    outcome: None,
-                    error: None,
-                };
+                let mut finding = Finding::new(c);
                 let Some(v) = registry.get(&c.validator) else {
                     s.broken += 1;
                     finding.error = Some(format!("알 수 없는 검증기: {}", c.validator));
                     findings.push(finding);
                     continue;
                 };
-                if v.needs_render() {
-                    s.skipped_render += 1;
-                    continue;
-                }
                 if value.is_none() && !v.checks_missing() {
                     continue;
                 }
@@ -86,8 +88,25 @@ pub fn validate_all(conn: &Connection, registry: &Registry) -> Result<Validation
                     value: value.unwrap_or(""),
                     source_value: if locale.is_source { None } else { source_value },
                 };
+                let result = if v.needs_render() {
+                    match render.for_params(&c.params, &locale.code) {
+                        Err(SetupError::Unavailable(why)) => {
+                            s.skipped_render += 1;
+                            skipped_reasons.insert(why);
+                            report.skipped_cells.push((token.id.clone(), locale.code.clone()));
+                            continue;
+                        }
+                        Err(SetupError::Config(msg)) => Err(msg),
+                        Ok(mut p) => {
+                            finding.render = Some(p.info.clone());
+                            v.check(&ctx, &c.params, Some(&mut p.ctx)).map_err(|e| e.to_string())
+                        }
+                    }
+                } else {
+                    v.check(&ctx, &c.params, None).map_err(|e| e.to_string())
+                };
                 s.checks += 1;
-                match v.check(&ctx, &c.params, None) {
+                match result {
                     Ok(o) if o.verdict == Verdict::Fail => {
                         match c.severity {
                             Severity::Error => s.error += 1,
@@ -100,7 +119,7 @@ pub fn validate_all(conn: &Connection, registry: &Registry) -> Result<Validation
                     Ok(_) => {}
                     Err(e) => {
                         s.broken += 1;
-                        finding.error = Some(e.to_string());
+                        finding.error = Some(e);
                         findings.push(finding);
                     }
                 }
@@ -115,6 +134,7 @@ pub fn validate_all(conn: &Connection, registry: &Registry) -> Result<Validation
             }
         }
     }
+    report.render_skipped = skipped_reasons.into_iter().collect();
     Ok(report)
 }
 
@@ -176,15 +196,8 @@ mod tests {
             &input("text.length", json!({ "max": 1 }), Scope::Tag("button".into()), Severity::Info),
         )
         .unwrap();
-        save_constraint(
-            &mut conn,
-            "t",
-            &reg,
-            &input("render.max_width", json!({ "max_width_px": 100 }), Scope::Global, Severity::Error),
-        )
-        .unwrap();
 
-        let r = validate_all(&conn, &reg).unwrap();
+        let r = validate_all(&conn, &reg, None).unwrap();
         let mut got: Vec<(String, String, String)> = r
             .cells
             .iter()
@@ -202,10 +215,63 @@ mod tests {
         );
         assert_eq!((r.summary.error, r.summary.warning, r.summary.info), (2, 1, 1));
         assert_eq!(r.summary.cells, 4);
-        assert_eq!(r.summary.skipped_render, 4);
+        assert_eq!(r.summary.skipped_render, 0);
 
         delete_constraint(&mut conn, "t", &tag_len).unwrap();
-        assert_eq!(validate_all(&conn, &reg).unwrap().summary.info, 0);
+        assert_eq!(validate_all(&conn, &reg, None).unwrap().summary.info, 0);
+    }
+
+    #[test]
+    fn runs_render_checks_and_skips_when_engine_is_missing() {
+        use crate::render::tests::{fake_engines, profile_input, temp_project};
+        use crate::render::{add_font_bytes, register_engine, save_profile};
+
+        let (dir, mut conn) = temp_project("validate");
+        let (mut engines, _) = fake_engines();
+        let reg = Registry::builtin();
+        tokens::add_locale(&conn, "ko-KR", "한국어", true).unwrap();
+        tokens::add_locale(&conn, "en-US", "English", false).unwrap();
+        let dll = dir.join("engines").join("v1.dll");
+        std::fs::write(&dll, b"x").unwrap();
+        register_engine(&mut conn, "t", &mut engines, &dll, None).unwrap();
+        let font = add_font_bytes(&mut conn, "t", "a.ttf", b"a").unwrap();
+        let profile = save_profile(&mut conn, "t", &profile_input("v1", &font.id)).unwrap();
+        let a = tokens::create_token(&mut conn, "t", "home.title", None).unwrap();
+        let set = |l: &str, v: &str| CellChange {
+            key: CellKey::new(&a, l),
+            new: Some(CellValue::translated(v)),
+        };
+        apply(&mut conn, &ChangesetMeta::new("t", ChangesetKind::Edit), &[set("ko-KR", "확인"), set("en-US", "Confirm")])
+            .unwrap();
+
+        // 렌더 규칙은 프로필이 있어야 저장된다
+        let no_profile = input("render.max_width", json!({ "max_width_px": 50 }), Scope::Global, Severity::Error);
+        assert!(save_constraint(&mut conn, "t", &reg, &no_profile).is_err());
+        let missing = input("render.max_width", json!({ "profile": "none", "max_width_px": 50 }), Scope::Global, Severity::Error);
+        assert!(save_constraint(&mut conn, "t", &reg, &missing).is_err());
+        // 글자 10px: 확인 20px 통과, Confirm 70px 실패
+        let rule = input("render.max_width", json!({ "profile": profile, "max_width_px": 50 }), Scope::Global, Severity::Error);
+        save_constraint(&mut conn, "t", &reg, &rule).unwrap();
+
+        let r = validate_all(&conn, &reg, Some(&mut engines)).unwrap();
+        assert_eq!(r.summary.checks, 2);
+        assert_eq!(r.cells.len(), 1);
+        assert_eq!(r.cells[0].locale, "en-US");
+        let f = &r.cells[0].findings[0];
+        assert_eq!(f.validator, "render.max_width");
+        assert_eq!(f.render.as_ref().map(|i| (i.profile.as_str(), i.engine.as_str())), Some(("버튼", "v1")));
+
+        // 엔진 없이 검증하면 건너뛴다
+        let r = validate_all(&conn, &reg, None).unwrap();
+        assert_eq!((r.summary.skipped_render, r.cells.len()), (2, 0));
+
+        // 이 PC 에 DLL 이 없으면 이유와 함께 건너뛴다
+        std::fs::remove_file(&dll).unwrap();
+        let (mut fresh, _) = fake_engines();
+        let r = validate_all(&conn, &reg, Some(&mut fresh)).unwrap();
+        assert_eq!(r.summary.skipped_render, 2);
+        assert_eq!(r.skipped_cells.len(), 2);
+        assert!(r.render_skipped[0].contains("DLL이 없음"), "{:?}", r.render_skipped);
     }
 
     #[test]

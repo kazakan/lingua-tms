@@ -28,15 +28,17 @@ crates/core           tms-core: SQLite 저장소, 변경 이력, diff, 검증기
   src/export.rs       내보내기 대상, 제품 키 고정, 포맷 어댑터(내보내기·역가져오기), 검증 게이트
   src/export/command.rs  명령 어댑터: 외부 프로그램에 요청 JSON 을 넘겨 제품 파일을 쓰고 읽게 함
   src/validate/       검증기 레지스트리, 내장 검증기 9종, 제약 해석(resolve), 저장(store), 전체 검증(run)
+  src/render.rs       렌더 측정 설정(엔진 DLL 등록·폰트·렌더 프로필), 엔진 캐시(EngineSet),
+                      측정 준비(RenderSession), 미리 보기·셀 측정(measure_text, measure_cell)
 crates/measure        tms-measure: Measurer 트레이트 + 엔진 DLL 바인딩(libloading)
-crates/engine-stub    개발용 가짜 엔진 DLL. tms_measure.h 를 Rust로 구현
+crates/engine-stub    개발용 가짜 엔진 DLL. tms_measure.h 를 Rust로 구현(폰트를 보지 않는 고정 폭)
 engine/include/tms_measure.h   엔진 팀과의 C 인터페이스 계약(ABI 1)
 docs/command-adapter.md        명령 어댑터 프로토콜(요청·응답 JSON, 종료 코드). 사용자용 문서
 examples/command-adapter/      명령 어댑터 예제(CSV, 파이썬판·PowerShell 판). 테스트가 이 예제를 실행한다
 src-tauri/            Tauri 2 앱. 명령(IPC)만 두고 tms-core 를 호출한다
 src/                  화면(React + TypeScript + Vite). api.ts 가 Rust 명령 래퍼
-  App.tsx             뼈대(프로젝트 열기, 탭, 오류 띠). 탭: 문구·검증·가져오기·내보내기·이력
-  views/              탭별 화면. components/ 는 공용(열 매핑 편집기, 변경 표시)
+  App.tsx             뼈대(프로젝트 열기, 탭, 오류 띠). 탭: 문구·검증·렌더·가져오기·내보내기·이력
+  views/              탭별 화면. components/ 는 공용(열 매핑 편집기, 변경 표시, 측정 결과)
 ```
 
 ## 빌드와 실행 (Windows)
@@ -54,7 +56,8 @@ npm run build                     # 화면 타입 검사 + 빌드
 npm run tauri build               # 설치 파일(NSIS) → target/release/bundle/nsis
 ```
 
-FFI 테스트(`crates/measure/tests/stub_engine.rs`)는 `tms_measure_stub.dll`을 `target/debug`와 `target/debug/deps`에서 찾는다.
+FFI 테스트(`crates/measure/tests/stub_engine.rs`, `crates/core/tests/render_stub.rs`)는 `tms_measure_stub.dll`을
+`target/debug`와 `target/debug/deps`에서 찾는다.
 - `cargo test --workspace`도 스텁 DLL을 빌드하지만 위치가 cargo 버전마다 다르다.
   - 로컬(cargo 1.99)에서는 `deps`에 생긴다.
   - GitHub 러너의 cargo는 `target/debug/build/…/out` 쪽에 둬서 테스트가 못 찾았다.
@@ -77,17 +80,22 @@ FFI 테스트(`crates/measure/tests/stub_engine.rs`)는 `tms_measure_stub.dll`�
 - CI(`.github/workflows/ci.yml`): main push와 PR마다 Windows에서 `npm run build`, clippy(`-D warnings`), `cargo test --workspace`.
 - 설치 파일은 코드 서명이 없다. 처음 실행할 때 SmartScreen 경고가 뜬다.
 
-## 현재 상태 (2026-11-26)
+## 현재 상태 (2026-11-27)
 
 - 마지막 릴리스 0.1.0(작업 2~6 포함). 0.0.1 은 작업 1(빌드·CI 구성)만 있다.
-- 0.1.0 뒤 main: 명령 어댑터(아래 결정 사항 "제품 내보내기"). 아직 릴리스하지 않았다.
+- 0.1.0 뒤 main: 명령 어댑터(아래 결정 사항 "제품 내보내기"), 렌더 연결(작업 7). 아직 릴리스하지 않았다.
 - Windows 11에서 확인한 것:
-  - `cargo test --workspace` 통과(core 38, engine-stub 2, 스텁 DLL FFI 1), clippy(`-D warnings`) 경고 없음, `npm run build` 성공
+  - `cargo test --workspace` 통과(core 44, 스텁 DLL 렌더 경로 1, engine-stub 2, 스텁 DLL FFI 1),
+    clippy(`-D warnings`) 경고 없음, `npm run build` 성공
+  - 실제 앱(`npm run tauri dev`)에서 저장소 밖에서 만든 참조 엔진(결정 사항 "참조 엔진 확인")과 Arial·맑은 고딕으로
+    눌러 확인(2026-11-27): DLL 등록(상대 경로·'불러옴'), 폰트 2개 추가,
+    프로필 편집·미리 보기(80px 에서 Chromium 과 같은 3줄), 렌더 규칙(프로필 선택) → 전체 검증 실패 표시(프로필·엔진 버전),
+    문구 표 옆 패널에서 고치는 동안 줄·폭 갱신 → 저장, 다시 열면 엔진을 처음 쓸 때 연다('파일 있음' → '불러옴'),
+    DLL 이 없으면 검증 탭에 건너뜀 수·이유, 렌더 탭 '파일 없음', 내보내기 게이트가 사유를 받아야 버튼이 켜짐
   - 명령 어댑터 테스트는 PowerShell 예제(Windows 에서 항상)와 파이썬 예제(`python`이 없으면 건너뜀)를 실제로 실행한다
   - 앱에서 명령 어댑터 확인: 파이썬 예제로 CSV 내보내기·키 고정, 실패 명령의 종료 코드·stderr 표시, 역가져오기 미리보기
   - `npm run tauri dev`로 각 탭을 직접 눌러 확인: 표 편집·붙여넣기, 엑셀 가져오기(이전 토큰명 매칭),
     내보내기(키 고정·직접 지정·역가져오기), 검증 규칙·결과·셀 이동·내보내기 차단, 이력(릴리스·되돌리기 충돌·두 시점·파일 비교)
-- 렌더 검증(폭·줄 수)은 아직 화면과 엔진에 연결되지 않았다(후순위). 렌더 규칙은 저장은 되지만 검증에서 건너뛴다.
 - 화면 수동 시험은 computer-use 로 한다. 시험용 엑셀은 rust_xlsxwriter 로 만들면 된다(openpyxl 없음).
 
 ## 지켜야 할 규칙
@@ -110,6 +118,8 @@ FFI 테스트(`crates/measure/tests/stub_engine.rs`)는 `tms_measure_stub.dll`�
 6. 제품 키(`token_external_key`)는 한 번 내보내면 고정이다. 규칙(접두어 등)은 새 토큰의 키를 제안할 때만 쓴다.
 7. **렌더링 측정(폭, 줄 수, 누락 글자)은 엔진 DLL(`Measurer`)로만 한다.**
    TMS 안에서 폭을 따로 계산하면 기기 결과와 달라진다. 단, 테스트용 가짜 측정기는 예외다.
+   - 앱의 측정은 모두 `render::EngineSet`(프로젝트를 연 동안 불러 둔 엔진·폰트)을 거친다.
+     화면도 폭을 다시 그리지 않고 엔진이 준 폭·줄 위치만 보여 준다.
 8. `engine/include/tms_measure.h`는 엔진 팀과의 계약이다. 구조체나 함수를 바꾸면 아래를 같이 고친다.
    - `TMS_MEASURE_ABI_VERSION`
    - `crates/measure/src/ffi.rs`의 `ABI_VERSION`과 repr(C) 구조체
@@ -118,11 +128,14 @@ FFI 테스트(`crates/measure/tests/stub_engine.rs`)는 `tms_measure_stub.dll`�
    - 명령을 추가하면 `generate_handler!`와 `src/api.ts`를 같이 고친다.
    - 인자 이름은 JS에서 camelCase, Rust에서 snake_case다. Tauri가 자동 변환한다.
    - 보통 명령은 메인 스레드에서 돌고 `with_project`(기다리지 않음, 바쁘면 바로 오류)를 쓴다.
+     측정 엔진도 쓰는 명령(검증, 엔진 등록, 측정)은 `with_engines`다. 엔진은 프로젝트와 같은 잠금 안에 있다.
      외부 명령을 실행할 수 있는 명령(내보내기, 가져오기 미리보기·적용, 파일 비교)은
      `#[tauri::command(async)]` + `with_project_wait`로 별도 스레드에서 돈다. 화면이 멈추지 않게 하려는 것이다.
 10. 새 검증기는 `Validator` 트레이트를 구현하고 `Registry::builtin`에 등록한다.
     - `params_schema`(JSON Schema)로 제약 입력 폼이 만들어진다.
     - 검증기 id·파라미터 형식을 바꾸면 `version()`을 올린다.
+    - 렌더 검증기(`needs_render`)의 파라미터에는 `profile`(렌더 프로필 id)이 붙는다(`validate/render.rs`의 `schema`).
+      실행하는 쪽(`validate::run`, `render::measure_cell`)이 이 값으로 `RenderCtx`를 만들고, 검증기는 보지 않는다.
 11. 명령 어댑터의 요청·응답 형식은 사용자 프로그램과의 계약이다. 바꾸면 아래를 같이 고친다.
     - `export/command.rs`의 `PROTOCOL_VERSION`
     - `docs/command-adapter.md`
@@ -178,6 +191,24 @@ FFI 테스트(`crates/measure/tests/stub_engine.rs`)는 `tms_measure_stub.dll`�
   - 엔진 DLL은 경우에 따라 없을 수 있다. DLL이 없어도 편집과 텍스트 검증은 동작해야 한다.
     렌더 검증기는 `RenderCtx` 없이 호출되면 `ValidateError::NeedsRender`를 돌려준다(죽지 않음).
   - 폰트 파일은 DB에 BLOB으로 넣는다(`font_asset`, sha256 중복 방지).
+  - 렌더 연결(2026-11-27, 작업 7):
+    - 엔진 등록: DLL 을 불러 `tms_engine_version()`을 읽고 그 값을 `measure_engine.id`로 쓴다. 같은 버전을 다시 등록하면 경로만 바꾼다.
+      경로는 .tms 에 저장하고, .tms 폴더 안의 DLL 은 상대 경로로 저장한다(폴더째 옮겨도 찾음). 열 때 파일의 버전이 다르면 쓰지 않는다.
+    - Windows 에서는 DLL 을 `LOAD_WITH_ALTERED_SEARCH_PATH`로 연다. 엔진 DLL 옆에 둔 의존 DLL 도 찾는다.
+    - 렌더 규칙은 파라미터 `profile`로 렌더 프로필을 고른다(규칙마다 글자 크기·폰트가 다를 수 있음). 프로필 없는 렌더 규칙은 저장을 거부한다.
+    - 폰트 폴백: 프로필의 언어별 목록이 있으면 기본(`"*"`) 목록 대신 그것만 쓴다(합치지 않음). 기본 목록은 비울 수 없다.
+    - 이 PC 에서 DLL 을 쓸 수 없으면(파일 없음, 불러오기 실패, 버전 다름) 렌더 검사는 건너뛰고 수·이유를 보여 준다.
+      내보낼 때는 건너뛴 렌더 검사도 warning 처럼 사유를 받는다. 프로필·폰트 설정 오류는 검증기 오류(제약 심각도대로)다.
+    - 결과(`Finding.render`)에 프로필 이름과 엔진 버전을 남긴다.
+    - 문구 표 옆 패널: 셀에 렌더 규칙이 있으면 저장 전 문구로 바로 재서 폭·줄 수·줄마다 끊긴 문구를 보여 준다.
+  - 참조 엔진 확인(2026-11-27): 공개 셰이핑 엔진(rustybuzz = HarfBuzz 포팅, MIT) + 유니코드 줄바꿈(unicode-linebreak, Apache-2.0)으로
+    tms_measure.h 를 구현한 DLL 을 임시로 만들어 실제 폰트로 측정 경로를 확인했다.
+    - **저장소·제품에는 넣지 않는다**(사용자 결정: 제3자 라이브러리 라이선스 문제를 피함). 테스트·CI 도 스텁 DLL 만 쓴다.
+    - 결과(16px): 맑은 고딕은 Chromium 캔버스(HarfBuzz)와 8개 문구 모두 0.01px 안(커닝 포함), Arial 은 커닝 문구 하나만 0.29px 차이.
+      WPF(FormattedText)는 커닝을 빼면 같다. 줄바꿈 4가지 경우가 Chromium(word-break: normal)과 같다
+    - 실제 엔진을 받으면 같은 문구로 기기 결과와 맞춰 본다. 한글 줄바꿈이 음절 단위(word-break: normal)인지 단어 단위(keep-all)인지도 확인한다
+  - 리눅스(2026-11-27 결정): 지금은 Windows 만. 나중에 할 때는 엔진을 `.so`로 받고(헤더는 그대로),
+    설치 파일(`.deb`/AppImage)과 CI 를 더한다. DLL 경로가 PC·OS 마다 다른 문제도 그때 다시 본다.
 - **UI 규칙**: 행 = 토큰, 열 = 언어인 엑셀형 표는 화면용 뷰일 뿐이다. 저장은 토큰 × 언어 단위 행이다.
 
 ## 다음 작업 (순서대로)
@@ -205,14 +236,18 @@ FFI 테스트(`crates/measure/tests/stub_engine.rs`)는 `tms_measure_stub.dll`�
 
 **후순위** (2026-11-25 결정: 렌더 연결은 위 작업을 마친 뒤에 한다)
 
-7. **렌더 연결**
-   - `font_asset` 등록, `render_profile` 편집, `measure_engine`(DLL 경로)
-   - 렌더 검증기를 `EngineDll`에 연결하고, 편집 중 폭·줄 수를 실시간으로 표시한다.
+7. ~~**렌더 연결**~~ 완료(`render.rs`, 렌더 탭)
+   - 엔진 DLL 등록, 폰트 추가, 렌더 프로필 편집(언어별 폰트 폴백), 프로필 미리 보기(저장 전 설정으로 잼)
+   - 렌더 검증기 4종을 엔진에 연결(전체 검증·내보내기 게이트), 문구 표 옆에서 고치는 동안 폭·줄 수 표시
 8. **실제 엔진 DLL** 받기, 골든 세트로 PC 결과와 기기 결과 일치 확인
+   - 실제 엔진이 오면 앱에서 DLL 을 등록해 같은 문구로 기기 결과와 비교한다(참조 엔진 확인 결과는 결정 사항에 기록)
+9. **리눅스 지원**(나중에): 위 결정 사항 "리눅스" 참고
 
 ## 미결 사항 (사용자·엔진 팀 확인 필요)
 
 - 엔진 C 인터페이스 합의: 스레드 안전성, 폰트 폴백 순서, 누락 글자 보고, 말줄임 동작, 제품별 엔진 버전 목록
+  - 스레드: TMS 는 측정을 한 번에 하나씩만 부르지만, 부르는 스레드는 매번 같지 않다(검증은 메인 스레드,
+    내보내기는 작업 스레드). 엔진이 스레드 로컬 상태를 쓰면 안 된다는 것을 확인해야 한다.
 - 골든 세트 준비(기기 화면 캡처)
 - 7개 언어 목록(복합 문자 포함 여부)
 - 제품별 관리 엑셀·제품 엑셀 샘플, placeholder 문법

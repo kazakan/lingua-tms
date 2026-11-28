@@ -9,6 +9,7 @@ use serde_json::Value;
 use tauri::{Manager, State};
 use tms_core::import::{ImportOptions, ImportPlan, ImportResult, ImportSource};
 use tms_core::model::{CellEdit, CellKey, ChangesetKind, ChangesetMeta, RevRow};
+use tms_core::render::{self, EngineSet};
 use tms_core::rusqlite::Connection;
 use tms_core::validate::{self, Registry};
 use tms_core::{db, export, grid, history, import, sheet, tokens, values};
@@ -16,6 +17,8 @@ use tms_core::{db, export, grid, history, import, sheet, tokens, values};
 struct Project {
     path: PathBuf,
     conn: Connection,
+    /// 불러 둔 측정 엔진 DLL 과 폰트. 측정이 한 번에 하나씩만 돌도록 연결과 같은 잠금 안에 둔다.
+    engines: EngineSet,
 }
 
 struct AppState {
@@ -54,6 +57,26 @@ fn with_project_wait<T>(state: &AppState, f: impl FnOnce(&mut Connection) -> tms
     f(&mut project.conn).map_err(err)
 }
 
+/// 측정 엔진도 쓰는 명령용(렌더 검증, 엔진 등록, 측정).
+fn with_engines<T>(
+    state: &AppState,
+    f: impl FnOnce(&mut Connection, &mut EngineSet) -> tms_core::Result<T>,
+) -> CmdResult<T> {
+    let mut guard = lock_now(state)?;
+    let project = guard.as_mut().ok_or("열린 프로젝트가 없음")?;
+    f(&mut project.conn, &mut project.engines).map_err(err)
+}
+
+/// [`with_engines`]의 기다리는 판(별도 스레드에서 도는 명령용).
+fn with_engines_wait<T>(
+    state: &AppState,
+    f: impl FnOnce(&mut Connection, &mut EngineSet) -> tms_core::Result<T>,
+) -> CmdResult<T> {
+    let mut guard = state.project.lock().map_err(err)?;
+    let project = guard.as_mut().ok_or("열린 프로젝트가 없음")?;
+    f(&mut project.conn, &mut project.engines).map_err(err)
+}
+
 #[derive(Serialize)]
 struct ProjectInfo {
     path: String,
@@ -68,6 +91,7 @@ fn open_project(state: State<'_, AppState>, path: String) -> CmdResult<ProjectIn
     *lock_now(&state)? = Some(Project {
         path: PathBuf::from(&path),
         conn,
+        engines: EngineSet::dll(),
     });
     Ok(ProjectInfo { path, schema_version })
 }
@@ -236,7 +260,7 @@ fn plan_export(state: State<'_, AppState>, target_id: String) -> CmdResult<expor
 /// 내보낼 셀의 검증 결과(error 는 차단, warning 은 사유 필요).
 #[tauri::command]
 fn check_export(state: State<'_, AppState>, target_id: String) -> CmdResult<export::ExportCheck> {
-    with_project(&state, |conn| export::check_export(conn, &state.registry, &target_id))
+    with_engines(&state, |conn, engines| export::check_export(conn, &state.registry, Some(engines), &target_id))
 }
 
 /// 파일로 내보내고 새 제품 키를 고정한다. 검증 error 가 있으면 거부, warning 이 있으면 note(사유) 필요.
@@ -249,8 +273,16 @@ fn export_to_file(
     note: Option<String>,
 ) -> CmdResult<export::ExportReport> {
     let author = state.author.clone();
-    with_project_wait(&state, |conn| {
-        export::export_to_file(conn, &author, &state.registry, &target_id, Path::new(&path), note.as_deref())
+    with_engines_wait(&state, |conn, engines| {
+        export::export_to_file(
+            conn,
+            &author,
+            &state.registry,
+            Some(engines),
+            &target_id,
+            Path::new(&path),
+            note.as_deref(),
+        )
     })
 }
 
@@ -286,10 +318,96 @@ fn delete_constraint(state: State<'_, AppState>, id: String) -> CmdResult<()> {
     with_project(&state, |conn| validate::delete_constraint(conn, &author, &id))
 }
 
-/// 전체 검증(캐시 없음). 위반이 있는 셀만 돌려준다.
+/// 전체 검증(캐시 없음). 위반이 있는 셀만 돌려준다. 렌더 검사는 측정 엔진으로 한다.
 #[tauri::command]
 fn validate_all(state: State<'_, AppState>) -> CmdResult<validate::ValidationReport> {
-    with_project(&state, |conn| validate::validate_all(conn, &state.registry))
+    with_engines(&state, |conn, engines| validate::validate_all(conn, &state.registry, Some(engines)))
+}
+
+// ── 렌더 측정 설정 ───────────────────────────────
+
+#[tauri::command]
+fn list_engines(state: State<'_, AppState>) -> CmdResult<Vec<render::EngineInfo>> {
+    with_engines(&state, |conn, engines| render::engine_infos(conn, engines))
+}
+
+/// 엔진 DLL 등록. DLL 이 알려 주는 엔진 버전이 id 가 된다. 같은 버전이면 경로만 바꾼다.
+#[tauri::command]
+fn register_engine(state: State<'_, AppState>, path: String, note: Option<String>) -> CmdResult<render::MeasureEngine> {
+    let author = state.author.clone();
+    with_engines(&state, |conn, engines| {
+        render::register_engine(conn, &author, engines, Path::new(&path), note.as_deref())
+    })
+}
+
+#[tauri::command]
+fn delete_engine(state: State<'_, AppState>, id: String) -> CmdResult<()> {
+    let author = state.author.clone();
+    with_engines(&state, |conn, engines| render::delete_engine(conn, &author, engines, &id))
+}
+
+#[tauri::command]
+fn list_fonts(state: State<'_, AppState>) -> CmdResult<Vec<render::FontAsset>> {
+    with_project(&state, |conn| render::list_fonts(conn))
+}
+
+/// 폰트 파일 추가(여러 개). 같은 내용이 이미 있으면 그것을 돌려준다.
+#[tauri::command]
+fn add_fonts(state: State<'_, AppState>, paths: Vec<String>) -> CmdResult<Vec<render::FontAsset>> {
+    let author = state.author.clone();
+    with_project(&state, |conn| {
+        paths.iter().map(|p| render::add_font(conn, &author, Path::new(p))).collect()
+    })
+}
+
+#[tauri::command]
+fn delete_font(state: State<'_, AppState>, id: String) -> CmdResult<()> {
+    let author = state.author.clone();
+    with_project(&state, |conn| render::delete_font(conn, &author, &id))
+}
+
+#[tauri::command]
+fn list_render_profiles(state: State<'_, AppState>) -> CmdResult<Vec<render::RenderProfile>> {
+    with_project(&state, |conn| render::list_profiles(conn))
+}
+
+#[tauri::command]
+fn save_render_profile(state: State<'_, AppState>, input: render::RenderProfileInput) -> CmdResult<String> {
+    let author = state.author.clone();
+    with_project(&state, |conn| render::save_profile(conn, &author, &input))
+}
+
+#[tauri::command]
+fn delete_render_profile(state: State<'_, AppState>, id: String) -> CmdResult<()> {
+    let author = state.author.clone();
+    with_project(&state, |conn| render::delete_profile(conn, &author, &id))
+}
+
+/// 프로필(저장하지 않은 것도 됨)로 문구 하나를 잰다. box_width 가 0 이면 한 줄.
+#[tauri::command]
+fn measure_text(
+    state: State<'_, AppState>,
+    profile: render::RenderProfileInput,
+    locale: String,
+    text: String,
+    box_width: f32,
+) -> CmdResult<render::LayoutView> {
+    with_engines(&state, |conn, engines| {
+        render::measure_text(conn, engines, &profile, &locale, &text, box_width)
+    })
+}
+
+/// 셀에 걸린 렌더 규칙을 고치는 중인 문구로 실행한다(통과 포함).
+#[tauri::command]
+fn measure_cell(
+    state: State<'_, AppState>,
+    token_id: String,
+    locale: String,
+    text: String,
+) -> CmdResult<Vec<render::RenderCheck>> {
+    with_engines(&state, |conn, engines| {
+        render::measure_cell(conn, &state.registry, engines, &token_id, &locale, &text)
+    })
 }
 
 #[tauri::command]
@@ -376,6 +494,17 @@ pub fn run() {
             list_tags,
             set_token_tags,
             list_validators,
+            list_engines,
+            register_engine,
+            delete_engine,
+            list_fonts,
+            add_fonts,
+            delete_font,
+            list_render_profiles,
+            save_render_profile,
+            delete_render_profile,
+            measure_text,
+            measure_cell,
         ])
         .run(tauri::generate_context!())
         .expect("Tauri 앱 실행 실패");

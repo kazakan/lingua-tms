@@ -266,7 +266,7 @@ export default function ExportView({ run, projectDir }: { run: RunFn; projectDir
               <PreviewCard
                 preview={preview}
                 canExport={
-                  !busy && !!check && check.errors.length === 0 && (check.warnings.length === 0 || reason.trim() !== "")
+                  !busy && !!check && check.errors.length === 0 && (!needsReason(check) || reason.trim() !== "")
                 }
                 busy={busy}
                 command={savedCommand}
@@ -529,9 +529,12 @@ function JsonConfigEditor({ value, onChange }: { value: unknown; onChange: (v: u
   );
 }
 
-/** 내보낼 셀의 검증 결과: 오류는 내보내기를 막고, 경고는 사유를 적어야 진행한다. */
+/** 경고가 있거나 하지 못한 렌더 검사가 있으면 사유를 적어야 내보낼 수 있다. */
+const needsReason = (check: ExportCheck) => check.warnings.length > 0 || check.skipped_render > 0;
+
+/** 내보낼 셀의 검증 결과: 오류는 내보내기를 막고, 경고와 하지 못한 렌더 검사는 사유를 적어야 진행한다. */
 function GateCard({ check, reason, onReason }: { check: ExportCheck; reason: string; onReason: (r: string) => void }) {
-  if (check.errors.length === 0 && check.warnings.length === 0) {
+  if (check.errors.length === 0 && !needsReason(check)) {
     return <div className="card muted">검증: 내보낼 셀에 오류·경고가 없습니다</div>;
   }
   const list = (issues: ExportIssue[]) => (
@@ -560,13 +563,28 @@ function GateCard({ check, reason, onReason }: { check: ExportCheck; reason: str
             <span className="badge warning">경고 {check.warnings.length}건</span> 사유를 적으면 내보낼 수 있습니다(변경 이력에 남음)
           </div>
           {list(check.warnings)}
-          <input
-            placeholder="경고를 두고 내보내는 사유"
-            value={reason}
-            onChange={(e) => onReason(e.target.value)}
-            style={{ width: "100%" }}
-          />
         </>
+      )}
+      {check.skipped_render > 0 && (
+        <>
+          <div>
+            <span className="badge warning">렌더 검사 {check.skipped_render}건을 하지 못함</span> 측정 엔진을 쓸 수 없습니다.
+            사유를 적으면 내보낼 수 있습니다
+          </div>
+          <ul style={{ margin: "4px 0 8px", paddingLeft: 18 }}>
+            {check.render_skipped.map((r) => (
+              <li key={r}>{r}</li>
+            ))}
+          </ul>
+        </>
+      )}
+      {needsReason(check) && (
+        <input
+          placeholder={check.warnings.length > 0 ? "경고를 두고 내보내는 사유" : "렌더 검사 없이 내보내는 사유"}
+          value={reason}
+          onChange={(e) => onReason(e.target.value)}
+          style={{ width: "100%" }}
+        />
       )}
     </div>
   );

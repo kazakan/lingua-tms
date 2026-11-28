@@ -7,6 +7,7 @@ import ImportView from "./views/ImportView";
 import ExportView from "./views/ExportView";
 import ValidationView from "./views/ValidationView";
 import HistoryView from "./views/HistoryView";
+import RenderView from "./views/RenderView";
 
 const FILTERS = [{ name: "TMS 프로젝트", extensions: ["tms"] }];
 
@@ -16,6 +17,7 @@ export type RunFn = (f: () => Promise<unknown>) => Promise<void>;
 const TABS = [
   { id: "strings", label: "문구" },
   { id: "validation", label: "검증" },
+  { id: "render", label: "렌더" },
   { id: "import", label: "가져오기" },
   { id: "export", label: "내보내기" },
   { id: "history", label: "이력" },
@@ -91,6 +93,7 @@ export default function App() {
         <main className="view" key={epoch}>
           {tab === "strings" && <StringsView run={run} focus={focus} onFocusDone={focusDone} />}
           {tab === "validation" && <ValidationView run={run} onOpenCell={openCell} />}
+          {tab === "render" && <RenderView run={run} />}
           {tab === "import" && <ImportView run={run} projectDir={projectDir} />}
           {tab === "export" && <ExportView run={run} projectDir={projectDir} />}
           {tab === "history" && <HistoryView run={run} onOpenCell={openCell} />}

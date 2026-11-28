@@ -474,7 +474,7 @@ mod tests {
         // 공백과 한글이 든 경로
         let out = dir.join("내보내기 결과").join("제품 A.csv");
         fs::create_dir_all(out.parent().unwrap()).unwrap();
-        let report = export_to_file(conn, "t", &Registry::builtin(), &target, &out, None).unwrap();
+        let report = export_to_file(conn, "t", &Registry::builtin(), None, &target, &out, None).unwrap();
         assert_eq!((report.rows, report.new_keys), (2, 2));
         let text = fs::read_to_string(&out).unwrap();
         assert!(text.contains("STR_HOME_TITLE") && text.contains("제목"), "{text}");
@@ -544,7 +544,7 @@ mod tests {
 
         // 0 이 아닌 종료 코드: 코드와 오류 출력, 실행 기록 폴더를 알려 주고 키는 고정하지 않는다
         let t = target(&mut conn, &powershell(&fixture, "fail {request}"), "", 60);
-        let Err(Error::Command(m)) = export_to_file(&mut conn, "t", &reg, &t, &out, None) else {
+        let Err(Error::Command(m)) = export_to_file(&mut conn, "t", &reg, None, &t, &out, None) else {
             panic!("명령 오류여야 함");
         };
         assert!(m.contains("종료 코드 3") && m.contains("제품 형식이 다름"), "{m}");
@@ -556,7 +556,7 @@ mod tests {
 
         // 종료 코드 0 인데 파일을 만들지 않음
         let t = target(&mut conn, &powershell(&fixture, "nofile {request}"), "", 60);
-        let Err(Error::Command(m)) = export_to_file(&mut conn, "t", &reg, &t, &out, None) else {
+        let Err(Error::Command(m)) = export_to_file(&mut conn, "t", &reg, None, &t, &out, None) else {
             panic!("명령 오류여야 함");
         };
         assert!(m.contains("파일을 만들지 않음"), "{m}");
@@ -564,7 +564,7 @@ mod tests {
 
         // 시간 초과
         let t = target(&mut conn, &powershell(&fixture, "sleep {request}"), "", 1);
-        let Err(Error::Command(m)) = export_to_file(&mut conn, "t", &reg, &t, &out, None) else {
+        let Err(Error::Command(m)) = export_to_file(&mut conn, "t", &reg, None, &t, &out, None) else {
             panic!("명령 오류여야 함");
         };
         assert!(m.contains("1초 안에 끝나지 않아"), "{m}");
@@ -581,7 +581,7 @@ mod tests {
         let (dir, mut conn) = project();
         let t = target(&mut conn, "tms-no-such-program {request}", "", 60);
         let out = dir.join("out.csv");
-        let Err(Error::Command(m)) = export_to_file(&mut conn, "t", &Registry::builtin(), &t, &out, None) else {
+        let Err(Error::Command(m)) = export_to_file(&mut conn, "t", &Registry::builtin(), None, &t, &out, None) else {
             panic!("명령 오류여야 함");
         };
         assert!(m.contains("실행하지 못함"), "{m}");

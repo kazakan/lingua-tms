@@ -10,6 +10,7 @@ use super::{load_constraints, ConstraintDef, Registry, Scope, Severity, TextCtx,
 use crate::history::{insert_changeset, record_entity};
 use crate::ids::new_id;
 use crate::model::{ChangesetKind, ChangesetMeta};
+use crate::render::{get_profile, profile_id_of};
 use crate::tokens::{list_locales, token_key};
 use crate::{Error, Result};
 
@@ -37,8 +38,8 @@ fn yes() -> bool {
     true
 }
 
-/// 제약 저장. 검증기·범위·언어를 확인하고, 텍스트 검증기는 파라미터도 미리 검사한다
-/// (렌더 검증기는 측정 엔진이 있어야 파라미터를 읽으므로 실행할 때 확인된다).
+/// 제약 저장. 검증기·범위·언어와 파라미터 형식을 확인한다.
+/// 렌더 검증기는 파라미터 `profile`에 있는 렌더 프로필을 골라야 한다(측정은 실행할 때 한다).
 pub fn save_constraint(conn: &mut Connection, author: &str, registry: &Registry, input: &ConstraintInput) -> Result<String> {
     let v = registry
         .get(&input.validator)
@@ -46,16 +47,20 @@ pub fn save_constraint(conn: &mut Connection, author: &str, registry: &Registry,
     if !input.params.is_object() {
         return Err(Error::Invalid("파라미터는 객체(JSON object)여야 함".into()));
     }
-    if !v.needs_render() {
-        let probe = TextCtx {
-            token_key: "",
-            locale: "",
-            value: "",
-            source_value: None,
-        };
-        if let Err(ValidateError::Params(e)) = v.check(&probe, &input.params, None) {
-            return Err(Error::Invalid(format!("파라미터 오류: {e}")));
-        }
+    // 검증기는 파라미터부터 읽으므로, 측정 엔진 없이 불러도 형식 오류는 Params 로 돌아온다(렌더 검증기는 그다음 NeedsRender).
+    let probe = TextCtx {
+        token_key: "",
+        locale: "",
+        value: "",
+        source_value: None,
+    };
+    if let Err(ValidateError::Params(e)) = v.check(&probe, &input.params, None) {
+        return Err(Error::Invalid(format!("파라미터 오류: {e}")));
+    }
+    if v.needs_render() {
+        let profile = profile_id_of(&input.params)
+            .ok_or_else(|| Error::Invalid("렌더 규칙은 렌더 프로필을 골라야 함".into()))?;
+        get_profile(conn, profile)?;
     }
     let scope = match &input.scope {
         Scope::Global => Scope::Global,

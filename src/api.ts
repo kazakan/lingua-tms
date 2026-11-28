@@ -243,6 +243,9 @@ export interface ExportIssue {
 export interface ExportCheck {
   errors: ExportIssue[];
   warnings: ExportIssue[];
+  /** 측정 엔진을 쓸 수 없어 건너뛴 렌더 검사(사유 필요) */
+  skipped_render: number;
+  render_skipped: string[];
 }
 
 // ── 검증 ─────────────────────────────────
@@ -281,13 +284,20 @@ export interface Outcome {
   metrics: unknown;
 }
 
+/** 렌더 검사를 잰 프로필 이름과 엔진 버전 */
+export interface RenderInfo {
+  profile: string;
+  engine: string;
+}
+
 export interface Finding {
   constraint_id: string;
   validator: string;
   severity: Severity;
   outcome: Outcome | null;
-  /** 검증기 자체 오류(파라미터 오류 등) */
+  /** 검증기 자체 오류(파라미터 오류, 렌더 설정 오류 등) */
   error: string | null;
+  render: RenderInfo | null;
 }
 
 export interface CellFindings {
@@ -306,8 +316,78 @@ export interface ValidationReport {
     warning: number;
     info: number;
     broken: number;
+    /** 측정 엔진을 쓸 수 없어 건너뛴 렌더 검사 */
     skipped_render: number;
   };
+  /** 렌더 검사를 건너뛴 이유 */
+  render_skipped: string[];
+}
+
+// ── 렌더 측정 ─────────────────────────────
+
+/** 렌더 프로필 폰트 목록에서 기본(모든 언어) 목록의 키 */
+export const DEFAULT_FONTS = "*";
+
+export type WrapMode = "none" | "engine";
+
+export interface MeasureEngine {
+  /** 엔진 버전(DLL 의 tms_engine_version) */
+  id: string;
+  /** .tms 폴더 안이면 상대 경로 */
+  dll_path: string;
+  note: string | null;
+}
+
+export interface EngineInfo extends MeasureEngine {
+  resolved_path: string;
+  exists: boolean;
+  loaded: boolean;
+}
+
+export interface FontAsset {
+  id: string;
+  family: string;
+  file_name: string;
+  sha256: string;
+  size: number;
+}
+
+export interface RenderProfile {
+  id: string;
+  name: string;
+  engine_id: string;
+  size_px: number;
+  letter_spacing: number;
+  /** 0 = 엔진 기본값 */
+  line_height: number;
+  wrap: WrapMode;
+  /** 언어별 폰트 폴백 순서(폰트 id). "*" 는 기본, 언어 목록이 있으면 기본 대신 그것만 쓴다 */
+  fonts: Record<string, string[]>;
+}
+
+export interface RenderProfileInput extends Omit<RenderProfile, "id"> {
+  id: string | null;
+}
+
+export interface LayoutView {
+  /** 0 = 줄바꿈 없이 한 줄 */
+  box_width: number;
+  /** 비교할 한도(박스 폭 또는 최대 폭) */
+  limit: number | null;
+  width: number;
+  height: number;
+  missing_glyphs: number;
+  word_overflow: boolean;
+  lines: { text: string; width: number }[];
+  engine: string;
+}
+
+/** 셀 하나의 렌더 검사(통과 포함) */
+export interface RenderCheck {
+  finding: Finding;
+  /** 측정 엔진을 쓸 수 없어 건너뛴 이유 */
+  skipped: string | null;
+  layout: LayoutView | null;
 }
 
 export const api = {
@@ -357,4 +437,19 @@ export const api = {
   validateAll: () => invoke<ValidationReport>("validate_all"),
   listTags: () => invoke<string[]>("list_tags"),
   setTokenTags: (tokenId: string, tags: string[]) => invoke<number | null>("set_token_tags", { tokenId, tags }),
+  listEngines: () => invoke<EngineInfo[]>("list_engines"),
+  registerEngine: (path: string, note: string | null) => invoke<MeasureEngine>("register_engine", { path, note }),
+  deleteEngine: (id: string) => invoke<void>("delete_engine", { id }),
+  listFonts: () => invoke<FontAsset[]>("list_fonts"),
+  addFonts: (paths: string[]) => invoke<FontAsset[]>("add_fonts", { paths }),
+  deleteFont: (id: string) => invoke<void>("delete_font", { id }),
+  listRenderProfiles: () => invoke<RenderProfile[]>("list_render_profiles"),
+  saveRenderProfile: (input: RenderProfileInput) => invoke<string>("save_render_profile", { input }),
+  deleteRenderProfile: (id: string) => invoke<void>("delete_render_profile", { id }),
+  /** 저장하지 않은 프로필로도 잰다. boxWidth 0 = 한 줄 */
+  measureText: (profile: RenderProfileInput, locale: string, text: string, boxWidth: number) =>
+    invoke<LayoutView>("measure_text", { profile, locale, text, boxWidth }),
+  /** 셀에 걸린 렌더 규칙을 고치는 중인 문구로 실행 */
+  measureCell: (tokenId: string, locale: string, text: string) =>
+    invoke<RenderCheck[]>("measure_cell", { tokenId, locale, text }),
 };

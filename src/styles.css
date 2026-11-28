@@ -446,3 +446,71 @@ table.table tr.active td {
   overflow: auto;
   border: 1px solid #e2e8f0;
 }
+
+/* ── 렌더 측정 결과 ─────────────────────── */
+.measure {
+  margin: 4px 0 8px;
+}
+
+.over-text {
+  color: #b91c1c;
+}
+
+.lines {
+  margin-top: 4px;
+}
+
+.line {
+  margin-bottom: 4px;
+}
+
+/* 막대 길이 = 엔진이 잰 줄 폭, 세로선 = 한도 */
+.line-bar {
+  position: relative;
+  height: 6px;
+  background: #f1f5f9;
+  border-radius: 3px;
+}
+
+.line-bar span {
+  display: block;
+  height: 100%;
+  background: #93c5fd;
+  border-radius: 3px;
+}
+
+.line-bar span.over {
+  background: #f87171;
+}
+
+.line-bar i {
+  position: absolute;
+  top: -3px;
+  bottom: -3px;
+  width: 2px;
+  background: #334155;
+}
+
+.line-text {
+  font-size: 12px;
+}
+
+.render-check {
+  border-top: 1px solid #f1f5f9;
+  padding-top: 6px;
+  margin-top: 6px;
+}
+
+.font-list {
+  margin: 0 0 4px;
+  padding-left: 20px;
+}
+
+.font-list li {
+  margin-bottom: 2px;
+}
+
+.font-list button {
+  padding: 0 6px;
+  font-size: 11px;
+}

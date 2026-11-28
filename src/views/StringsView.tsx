@@ -22,12 +22,14 @@ import {
   type CellFindings,
   type Grid,
   type GridRow,
+  type RenderCheck,
   type RevRow,
   type Severity,
   type ValidationReport,
 } from "../api";
 import type { RunFn } from "../App";
-import { SeverityBadge, metricsText } from "./ValidationView";
+import MeasureResult from "../components/MeasureResult";
+import { SeverityBadge, metricsText, renderText } from "./ValidationView";
 
 type Filters = {
   text: string;
@@ -339,11 +341,24 @@ export default function StringsView({
                                 {f.outcome?.message} <span className="muted">{metricsText(f.outcome?.metrics)}</span>
                               </>
                             )}
+                            {f.render && <div className="muted">{renderText(f.render)}</div>}
                           </div>
                         </div>
                       ))}
                     </>
                   )}
+                  <RenderPanel
+                    key={`${selRow.token.id}|${selected.locale}|${selCell?.value ?? ""}`}
+                    tokenId={selRow.token.id}
+                    locale={selected.locale}
+                    value={selCell?.value ?? ""}
+                    onSave={(value) =>
+                      run(async () => {
+                        await api.setCells([{ token_id: selRow.token.id, locale: selected.locale!, value }]);
+                        await reload();
+                      })
+                    }
+                  />
                   <h4>이력</h4>
                   <ol className="history">
                     {history.map((h) => (
@@ -366,6 +381,74 @@ export default function StringsView({
         </aside>
       </div>
     </div>
+  );
+}
+
+/**
+ * 셀에 렌더 규칙이 있으면 여기서 고치는 동안 엔진이 잰 폭·줄 수를 바로 보여 준다(저장 전 문구로 잼).
+ * 렌더 규칙이 없는 셀에서는 아무것도 그리지 않는다.
+ */
+function RenderPanel({
+  tokenId,
+  locale,
+  value,
+  onSave,
+}: {
+  tokenId: string;
+  locale: string;
+  value: string;
+  onSave: (value: string) => void;
+}) {
+  const [text, setText] = useState(value);
+  const [checks, setChecks] = useState<RenderCheck[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    const t = setTimeout(() => {
+      api
+        .measureCell(tokenId, locale, text)
+        .then((r) => alive && (setChecks(r), setError(null)))
+        .catch((e) => alive && setError(String(e)));
+    }, 150);
+    return () => {
+      alive = false;
+      clearTimeout(t);
+    };
+  }, [tokenId, locale, text]);
+
+  if (!checks || checks.length === 0) return error ? <div className="notice">{error}</div> : null;
+  return (
+    <>
+      <h4>렌더 (고치는 동안 바로 잼)</h4>
+      <textarea value={text} onChange={(e) => setText(e.target.value)} rows={3} style={{ width: "100%" }} />
+      <div className="row">
+        <button className="primary" disabled={text === value} onClick={() => onSave(text)}>
+          저장
+        </button>
+        <button disabled={text === value} onClick={() => setText(value)}>
+          되돌리기
+        </button>
+        {error && <span className="notice">{error}</span>}
+      </div>
+      {checks.map((c) => {
+        const f = c.finding;
+        const failed = f.outcome?.verdict === "fail";
+        return (
+          <div key={f.constraint_id} className="render-check">
+            <div>
+              {failed ? <SeverityBadge s={f.severity} /> : !c.skipped && !f.error && <span className="badge gray">통과</span>}{" "}
+              {f.validator}
+              {f.render && <span className="muted"> · {renderText(f.render)}</span>}
+            </div>
+            {c.skipped && <div className="notice">건너뜀: {c.skipped}</div>}
+            {f.error && <div className="notice">검증기 오류: {f.error}</div>}
+            {failed && <div className="pre">{f.outcome?.message}</div>}
+            {c.layout && <MeasureResult layout={c.layout} />}
+          </div>
+        );
+      })}
+    </>
   );
 }
 

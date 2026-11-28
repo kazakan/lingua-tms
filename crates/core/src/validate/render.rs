@@ -19,6 +19,21 @@ fn need<'a, 'm>(render: Option<&'a mut RenderCtx<'m>>) -> Result<&'a mut RenderC
     render.ok_or(ValidateError::NeedsRender)
 }
 
+/// 파라미터 형식 버전. 2: 렌더 프로필(`profile`) 추가.
+const PARAMS_VERSION: u32 = 2;
+
+/// 렌더 검증기 파라미터 스키마. 공통으로 잴 렌더 프로필(`profile`, 프로필 id)이 붙는다.
+/// 프로필은 실행하는 쪽이 읽어 RenderCtx 를 만들고, 검증기는 보지 않는다.
+fn schema(required: &[&str], properties: Value) -> Value {
+    let mut props = json!({ "profile": { "type": "string", "title": "렌더 프로필" } });
+    if let (Some(p), Some(extra)) = (props.as_object_mut(), properties.as_object()) {
+        p.extend(extra.clone());
+    }
+    let mut req = vec!["profile"];
+    req.extend_from_slice(required);
+    json!({ "type": "object", "required": req, "properties": props })
+}
+
 // ── render.glyph_coverage ──────────────────────
 struct GlyphCoverage;
 
@@ -30,7 +45,10 @@ impl Validator for GlyphCoverage {
         "폰트(폴백 포함)에 없는 글자 검출"
     }
     fn params_schema(&self) -> Value {
-        json!({ "type": "object", "properties": {} })
+        schema(&[], json!({}))
+    }
+    fn version(&self) -> u32 {
+        PARAMS_VERSION
     }
     fn needs_render(&self) -> bool {
         true
@@ -63,11 +81,13 @@ impl Validator for MaxWidth {
         "줄바꿈 없이 한 줄 폭 ≤ N px"
     }
     fn params_schema(&self) -> Value {
-        json!({
-            "type": "object",
-            "required": ["max_width_px"],
-            "properties": { "max_width_px": { "type": "number", "exclusiveMinimum": 0, "title": "최대 폭(px)" } }
-        })
+        schema(
+            &["max_width_px"],
+            json!({ "max_width_px": { "type": "number", "exclusiveMinimum": 0, "title": "최대 폭(px)" } }),
+        )
+    }
+    fn version(&self) -> u32 {
+        PARAMS_VERSION
     }
     fn needs_render(&self) -> bool {
         true
@@ -106,15 +126,17 @@ impl Validator for LineCount {
         "박스 폭에서 자동 줄바꿈 시 줄 수 범위"
     }
     fn params_schema(&self) -> Value {
-        json!({
-            "type": "object",
-            "required": ["box_width_px"],
-            "properties": {
+        schema(
+            &["box_width_px"],
+            json!({
                 "box_width_px": { "type": "number", "exclusiveMinimum": 0, "title": "박스 폭(px)" },
                 "min": { "type": "integer", "minimum": 1, "title": "최소 줄 수" },
                 "max": { "type": "integer", "minimum": 1, "title": "최대 줄 수" }
-            }
-        })
+            }),
+        )
+    }
+    fn version(&self) -> u32 {
+        PARAMS_VERSION
     }
     fn needs_render(&self) -> bool {
         true
@@ -162,11 +184,13 @@ impl Validator for WordOverflow {
         "단어 하나가 박스보다 넓어 넘침(독일어 복합어 등)"
     }
     fn params_schema(&self) -> Value {
-        json!({
-            "type": "object",
-            "required": ["box_width_px"],
-            "properties": { "box_width_px": { "type": "number", "exclusiveMinimum": 0, "title": "박스 폭(px)" } }
-        })
+        schema(
+            &["box_width_px"],
+            json!({ "box_width_px": { "type": "number", "exclusiveMinimum": 0, "title": "박스 폭(px)" } }),
+        )
+    }
+    fn version(&self) -> u32 {
+        PARAMS_VERSION
     }
     fn needs_render(&self) -> bool {
         true

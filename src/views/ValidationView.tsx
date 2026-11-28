@@ -10,6 +10,8 @@ import {
   type ConstraintDef,
   type ConstraintInput,
   type Locale,
+  type RenderInfo,
+  type RenderProfile,
   type Scope,
   type Severity,
   type Token,
@@ -34,6 +36,18 @@ export function metricsText(m: unknown): string {
     .join(" · ");
 }
 
+/** 렌더 검사를 잰 프로필·엔진: "버튼 16px · 엔진 stub-0.1.0" */
+export function renderText(r: RenderInfo | null | undefined): string {
+  return r ? `${r.profile} · 엔진 ${r.engine}` : "";
+}
+
+/** 규칙 파라미터를 짧은 글로. 렌더 프로필은 id 대신 이름으로 보여 준다. */
+function paramsText(params: Record<string, unknown>, profiles: RenderProfile[]): string {
+  if (typeof params.profile !== "string") return metricsText(params);
+  const name = profiles.find((p) => p.id === params.profile)?.name ?? "(없는 프로필)";
+  return metricsText({ ...params, profile: name });
+}
+
 export default function ValidationView({
   run,
   onOpenCell,
@@ -46,6 +60,7 @@ export default function ValidationView({
   const [locales, setLocales] = useState<Locale[]>([]);
   const [tokens, setTokens] = useState<Token[]>([]);
   const [tags, setTags] = useState<string[]>([]);
+  const [profiles, setProfiles] = useState<RenderProfile[]>([]);
   const [draft, setDraft] = useState<ConstraintInput | null>(null);
   const [report, setReport] = useState<ValidationReport | null>(null);
 
@@ -53,6 +68,7 @@ export default function ValidationView({
     setConstraints(await api.listConstraints());
     setTokens(await api.listTokens());
     setTags(await api.listTags());
+    setProfiles(await api.listRenderProfiles());
     setReport(await api.validateAll());
   }, []);
 
@@ -124,6 +140,7 @@ export default function ValidationView({
             locales={locales}
             tokens={tokens}
             tags={tags}
+            profiles={profiles}
           />
         )}
         <table className="table">
@@ -149,7 +166,7 @@ export default function ValidationView({
                   <SeverityBadge s={c.severity} />
                 </td>
                 <td>{c.enabled ? "켬" : "끔"}</td>
-                <td className="muted">{metricsText(c.params)}</td>
+                <td className="muted">{paramsText(c.params, profiles)}</td>
                 <td>{c.description}</td>
                 <td style={{ whiteSpace: "nowrap" }}>
                   <button onClick={() => setDraft({ ...c })}>수정</button>{" "}
@@ -212,9 +229,18 @@ function ReportView({
           </span>
         )}
         {s.skipped_render > 0 && (
-          <span className="muted">렌더 검사 {s.skipped_render}건은 측정 엔진 연결 전이라 건너뜀</span>
+          <span className="notice">
+            렌더 검사 <b>{s.skipped_render}</b>건을 건너뜀(측정 엔진을 쓸 수 없음)
+          </span>
         )}
       </div>
+      {report.render_skipped.length > 0 && (
+        <ul className="notice" style={{ margin: "0 0 8px", paddingLeft: 18 }}>
+          {report.render_skipped.map((r) => (
+            <li key={r}>{r}</li>
+          ))}
+        </ul>
+      )}
       {rows.length > 0 && (
         <div className="table-scroll">
           <table className="table">
@@ -249,6 +275,7 @@ function ReportView({
                         {f.outcome?.message} <span className="muted">{metricsText(f.outcome?.metrics)}</span>
                       </>
                     )}
+                    {f.render && <div className="muted">{renderText(f.render)}</div>}
                   </td>
                 </tr>
               ))}
@@ -269,10 +296,11 @@ function ConstraintEditor(props: {
   locales: Locale[];
   tokens: Token[];
   tags: string[];
+  profiles: RenderProfile[];
 }) {
-  const { draft, onChange, validators, locales, tokens, tags } = props;
+  const { draft, onChange, validators, locales, tokens, tags, profiles } = props;
   const v = validators.find((x) => x.id === draft.validator);
-  const schema = (v?.params_schema ?? { type: "object" }) as RJSFSchema;
+  const schema = withProfileChoices((v?.params_schema ?? { type: "object" }) as RJSFSchema, profiles);
   const hasParams = Object.keys((schema.properties as object | undefined) ?? {}).length > 0;
   const tokenKey = tokens.find((t) => draft.scope.kind === "token" && t.id === draft.scope.ref)?.key ?? "";
   const [tokenText, setTokenText] = useState(tokenKey);
@@ -285,7 +313,7 @@ function ConstraintEditor(props: {
           {validators.map((x) => (
             <option key={x.id} value={x.id}>
               {x.id} — {x.description}
-              {x.needs_render ? " (렌더: 측정 엔진 연결 전까지 건너뜀)" : ""}
+              {x.needs_render ? " (렌더)" : ""}
             </option>
           ))}
         </select>
@@ -367,13 +395,20 @@ function ConstraintEditor(props: {
         <span>파라미터</span>
         {hasParams ? (
           <div className="rjsf">
+            {v?.needs_render && profiles.length === 0 && (
+              <div className="notice">렌더 프로필이 없습니다. 렌더 탭에서 엔진 DLL·폰트·프로필을 먼저 만드세요.</div>
+            )}
             <Form
               key={draft.validator}
               schema={schema}
               formData={draft.params}
               validator={validator}
               onChange={(e) => onChange({ ...draft, params: (e.formData ?? {}) as Record<string, unknown> })}
-              uiSchema={{ "ui:submitButtonOptions": { norender: true } }}
+              uiSchema={{
+                "ui:submitButtonOptions": { norender: true },
+                // 렌더 프로필을 맨 위에. 없는 속성을 순서에 넣으면 rjsf 가 오류를 내므로 렌더 검증기에만 준다.
+                ...(v?.needs_render ? { "ui:order": ["profile", "*"] } : {}),
+              }}
               showErrorList={false}
             />
           </div>
@@ -389,4 +424,17 @@ function ConstraintEditor(props: {
       </div>
     </div>
   );
+}
+
+/** 렌더 검증기의 profile 파라미터를 프로젝트의 렌더 프로필 중에서 고르게 한다(id 를 저장, 이름을 보여 줌). */
+function withProfileChoices(schema: RJSFSchema, profiles: RenderProfile[]): RJSFSchema {
+  const props = schema.properties as Record<string, RJSFSchema> | undefined;
+  if (!props?.profile || profiles.length === 0) return schema;
+  return {
+    ...schema,
+    properties: {
+      ...props,
+      profile: { ...props.profile, oneOf: profiles.map((p) => ({ const: p.id, title: p.name })) },
+    },
+  };
 }

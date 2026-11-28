@@ -3,6 +3,8 @@
 //! 새 검증기를 추가하려면 [`Validator`]를 구현하고 [`Registry::builtin`]에 등록한다.
 //! `params_schema`(JSON Schema)로 화면의 제약 입력 폼이 자동으로 만들어진다.
 //! 렌더링 검증기는 [`RenderCtx`]의 `Measurer`(엔진 DLL)만 쓴다. 폭을 직접 계산하지 않는다.
+//! 렌더 제약의 파라미터 `profile`(렌더 프로필 id)은 실행하는 쪽(`run`, `render::measure_cell`)이 읽어
+//! [`RenderCtx`]를 만든다. 검증기는 이 값을 보지 않는다.
 
 mod render;
 mod resolve;
@@ -163,6 +165,13 @@ impl Registry {
     }
 }
 
+/// 렌더 검사 결과에 함께 남기는 렌더 프로필 이름과 엔진 버전.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct RenderInfo {
+    pub profile: String,
+    pub engine: String,
+}
+
 /// 제약 하나를 실행한 결과.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Finding {
@@ -170,34 +179,22 @@ pub struct Finding {
     pub validator: String,
     pub severity: Severity,
     pub outcome: Option<Outcome>,
-    /// 검증기 자체가 실패한 경우(파라미터 오류, 엔진 오류 ...). 문구 위반과 구분한다.
+    /// 검증기 자체가 실패한 경우(파라미터 오류, 엔진 오류, 렌더 설정 오류 ...). 문구 위반과 구분한다.
     pub error: Option<String>,
+    /// 렌더 검사면 어떤 프로필·엔진으로 쟀는지.
+    pub render: Option<RenderInfo>,
 }
 
-/// 셀 하나에 유효 제약들을 실행한다.
-pub fn run_constraints(
-    registry: &Registry,
-    constraints: &[&ConstraintDef],
-    ctx: &TextCtx<'_>,
-    mut render: Option<&mut RenderCtx<'_>>,
-) -> Vec<Finding> {
-    constraints
-        .iter()
-        .map(|c| {
-            let (outcome, error) = match registry.get(&c.validator) {
-                None => (None, Some(format!("알 수 없는 검증기: {}", c.validator))),
-                Some(v) => match v.check(ctx, &c.params, render.as_deref_mut()) {
-                    Ok(o) => (Some(o), None),
-                    Err(e) => (None, Some(e.to_string())),
-                },
-            };
-            Finding {
-                constraint_id: c.id.clone(),
-                validator: c.validator.clone(),
-                severity: c.severity,
-                outcome,
-                error,
-            }
-        })
-        .collect()
+impl Finding {
+    /// 아직 실행하지 않은 결과(outcome, error 없음).
+    pub fn new(c: &ConstraintDef) -> Self {
+        Self {
+            constraint_id: c.id.clone(),
+            validator: c.validator.clone(),
+            severity: c.severity,
+            outcome: None,
+            error: None,
+            render: None,
+        }
+    }
 }

@@ -2,7 +2,7 @@
 //!
 //! 프로젝트 하나 = DB 파일 하나. 문구, 이력, 폰트, 제약이 모두 이 파일에 들어간다.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use rusqlite::Connection;
 
@@ -34,6 +34,15 @@ fn configure(conn: &Connection) -> Result<()> {
     let _mode: String = conn.query_row("PRAGMA journal_mode = WAL", [], |r| r.get(0))?;
     conn.pragma_update(None, "busy_timeout", 5000)?;
     Ok(())
+}
+
+/// 프로젝트(.tms) 파일이 있는 폴더. 메모리 DB 면 None.
+/// 외부 명령의 작업 폴더, 상대 경로(엔진 DLL 등)의 기준이 된다.
+pub fn project_dir(conn: &Connection) -> Option<PathBuf> {
+    conn.path()
+        .filter(|p| !p.is_empty())
+        .and_then(|p| Path::new(p).parent())
+        .map(Path::to_path_buf)
 }
 
 pub fn schema_version(conn: &Connection) -> Result<i64> {

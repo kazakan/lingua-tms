@@ -60,6 +60,17 @@ type FnLayout = unsafe extern "C" fn(
     *mut RawResult,
 ) -> i32;
 
+/// DLL 을 연다. Windows 에서 절대 경로면 DLL 이 의존하는 다른 DLL 도 그 DLL 의 폴더에서 먼저 찾는다
+/// (엔진 DLL 옆에 둔 런타임 DLL 을 찾게). SAFETY: 신뢰하는 엔진 DLL만 불러온다는 전제. 초기화 루틴이 있어도 감수한다.
+fn open_library(path: &Path) -> Result<Library, libloading::Error> {
+    #[cfg(windows)]
+    if path.is_absolute() {
+        use libloading::os::windows::{Library as WinLibrary, LOAD_WITH_ALTERED_SEARCH_PATH};
+        return unsafe { WinLibrary::load_with_flags(path, LOAD_WITH_ALTERED_SEARCH_PATH) }.map(Library::from);
+    }
+    unsafe { Library::new(path) }
+}
+
 /// 엔진 측정 DLL. 한 스레드에서만 순서대로 호출한다(앱에서는 Mutex 안에 둔다).
 pub struct EngineDll {
     font_load: FnFontLoad,
@@ -77,9 +88,7 @@ unsafe impl Send for EngineDll {}
 impl EngineDll {
     /// DLL을 불러오고 ABI 버전을 확인한다.
     pub fn load(path: impl AsRef<Path>) -> Result<Self, MeasureError> {
-        // SAFETY: 신뢰하는 엔진 DLL만 불러온다는 전제. 초기화 루틴이 있어도 감수한다.
-        let lib = unsafe { Library::new(path.as_ref()) }
-            .map_err(|e| MeasureError::Load(e.to_string()))?;
+        let lib = open_library(path.as_ref()).map_err(|e| MeasureError::Load(e.to_string()))?;
 
         // SAFETY: 심볼 시그니처는 tms_measure.h와 같다.
         unsafe {

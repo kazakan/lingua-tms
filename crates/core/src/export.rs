@@ -20,6 +20,7 @@ use crate::history::{insert_changeset, record_entity};
 use crate::ids::new_id;
 use crate::model::{ChangesetKind, ChangesetMeta};
 use crate::tokens::{list_locales, list_tokens, source_locale, token_key};
+use crate::render::EngineSet;
 use crate::validate::{validate_all, Registry, Severity};
 use crate::values::ValueTable;
 use crate::{history, sheet, Error, Result};
@@ -311,18 +312,46 @@ pub struct ExportIssue {
 }
 
 /// 내보낼 셀(토큰 × 대상 언어)의 검증 결과. error 는 내보내기를 막고, warning 은 사유를 적어야 진행한다.
+/// 측정 엔진을 쓸 수 없어 건너뛴 렌더 검사도 확인하지 못한 것이므로 warning 처럼 사유를 받는다.
 #[derive(Debug, Clone, Default, PartialEq, Serialize)]
 pub struct ExportCheck {
     pub errors: Vec<ExportIssue>,
     pub warnings: Vec<ExportIssue>,
+    /// 내보낼 셀에서 건너뛴 렌더 검사 수.
+    pub skipped_render: usize,
+    /// 건너뛴 이유.
+    pub render_skipped: Vec<String>,
 }
 
-pub fn check_export(conn: &Connection, registry: &Registry, target_id: &str) -> Result<ExportCheck> {
+impl ExportCheck {
+    /// 사유를 적어야 내보낼 수 있는가.
+    pub fn needs_note(&self) -> bool {
+        !self.warnings.is_empty() || self.skipped_render > 0
+    }
+}
+
+/// `engines`가 None 이면 렌더 검사는 건너뛴 것으로 센다.
+pub fn check_export(
+    conn: &Connection,
+    registry: &Registry,
+    engines: Option<&mut EngineSet>,
+    target_id: &str,
+) -> Result<ExportCheck> {
     let preview = plan_export(conn, target_id)?;
     let tokens: HashSet<&str> = preview.rows.iter().map(|r| r.token_id.as_str()).collect();
     let locales: HashSet<&str> = preview.locales.iter().map(String::as_str).collect();
-    let report = validate_all(conn, registry)?;
-    let mut out = ExportCheck::default();
+    let report = validate_all(conn, registry, engines)?;
+    let mut out = ExportCheck {
+        skipped_render: report
+            .skipped_cells
+            .iter()
+            .filter(|(t, l)| tokens.contains(t.as_str()) && locales.contains(l.as_str()))
+            .count(),
+        ..Default::default()
+    };
+    if out.skipped_render > 0 {
+        out.render_skipped = report.render_skipped.clone();
+    }
     for cell in report
         .cells
         .iter()
@@ -358,24 +387,29 @@ pub fn export_to_file(
     conn: &mut Connection,
     author: &str,
     registry: &Registry,
+    engines: Option<&mut EngineSet>,
     target_id: &str,
     path: &Path,
     note: Option<&str>,
 ) -> Result<ExportReport> {
     let note = note.map(str::trim).filter(|n| !n.is_empty());
     let tx = conn.transaction()?;
-    let check = check_export(&tx, registry, target_id)?;
+    let check = check_export(&tx, registry, engines, target_id)?;
     if !check.errors.is_empty() {
         return Err(Error::Invalid(format!(
             "검증 오류 {}건이 있어 내보낼 수 없음(검증 탭에서 확인)",
             check.errors.len()
         )));
     }
-    if !check.warnings.is_empty() && note.is_none() {
-        return Err(Error::Invalid(format!(
-            "검증 경고 {}건: 내보내려면 사유를 적어야 함",
-            check.warnings.len()
-        )));
+    if check.needs_note() && note.is_none() {
+        let mut why = Vec::new();
+        if !check.warnings.is_empty() {
+            why.push(format!("검증 경고 {}건", check.warnings.len()));
+        }
+        if check.skipped_render > 0 {
+            why.push(format!("하지 못한 렌더 검사 {}건", check.skipped_render));
+        }
+        return Err(Error::Invalid(format!("{}: 내보내려면 사유를 적어야 함", why.join(", "))));
     }
     let preview = plan_export(&tx, target_id)?;
     let adapter = adapter(&preview.target.adapter)?;
@@ -383,6 +417,9 @@ pub fn export_to_file(
         let mut message = format!("export {} ({} rows)", preview.target.name, preview.rows.len());
         if !check.warnings.is_empty() {
             message.push_str(&format!(", {} warnings", check.warnings.len()));
+        }
+        if check.skipped_render > 0 {
+            message.push_str(&format!(", {} render checks skipped", check.skipped_render));
         }
         if let Some(n) = note {
             message.push_str(": ");
@@ -474,12 +511,10 @@ pub struct AdapterContext<'a> {
 
 impl<'a> AdapterContext<'a> {
     pub fn new(conn: &Connection, target: &'a ExportTarget) -> Self {
-        let project_dir = conn
-            .path()
-            .filter(|p| !p.is_empty())
-            .and_then(|p| Path::new(p).parent())
-            .map(Path::to_path_buf);
-        Self { target, project_dir }
+        Self {
+            target,
+            project_dir: crate::db::project_dir(conn),
+        }
     }
 }
 
@@ -730,7 +765,7 @@ mod tests {
         assert_eq!(p.rows[0].values.get("en-US").map(String::as_str), Some("확인"));
 
         let path = std::env::temp_dir().join(format!("tms-export-{}.xlsx", new_id()));
-        let report = export_to_file(&mut conn, "t", &Registry::builtin(), &target, &path, None).unwrap();
+        let report = export_to_file(&mut conn, "t", &Registry::builtin(), None, &target, &path, None).unwrap();
         assert_eq!((report.rows, report.new_keys), (2, 2));
         assert!(report.changeset_id.is_some());
 
@@ -783,22 +818,64 @@ mod tests {
             description: None,
         };
         let id = save_constraint(&mut conn, "t", &reg, &required).unwrap();
-        let check = check_export(&conn, &reg, &target).unwrap();
+        let check = check_export(&conn, &reg, None, &target).unwrap();
         assert_eq!(check.errors.len(), 1);
         assert_eq!((check.errors[0].token_key.as_str(), check.errors[0].locale.as_str()), ("common.ok", "en-US"));
-        assert!(export_to_file(&mut conn, "t", &reg, &target, &path, Some("사유")).is_err());
+        assert!(export_to_file(&mut conn, "t", &reg, None, &target, &path, Some("사유")).is_err());
         assert!(!path.exists());
 
         required.id = Some(id);
         required.severity = Severity::Warning;
         save_constraint(&mut conn, "t", &reg, &required).unwrap();
-        assert!(export_to_file(&mut conn, "t", &reg, &target, &path, None).is_err());
-        let report = export_to_file(&mut conn, "t", &reg, &target, &path, Some("영어는 다음 배포에")).unwrap();
+        assert!(export_to_file(&mut conn, "t", &reg, None, &target, &path, None).is_err());
+        let report = export_to_file(&mut conn, "t", &reg, None, &target, &path, Some("영어는 다음 배포에")).unwrap();
         let message: String = conn
             .query_row("SELECT message FROM changeset WHERE id = ?1", [report.changeset_id.unwrap()], |r| r.get(0))
             .unwrap();
         assert!(message.contains("1 warnings") && message.contains("영어는 다음 배포에"), "{message}");
         std::fs::remove_file(path).ok();
+    }
+
+    #[test]
+    fn skipped_render_checks_need_a_reason() {
+        use crate::render::tests::{fake_engines, profile_input};
+        use crate::render::{add_font_bytes, register_engine, save_profile};
+        use crate::validate::{save_constraint, ConstraintInput, Scope};
+        let (mut conn, target) = setup();
+        let reg = Registry::builtin();
+        let (mut engines, _) = fake_engines();
+        let dir = std::env::temp_dir().join("lingua-tms-test").join(format!("gate-{}", new_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let dll = dir.join("v1.dll");
+        std::fs::write(&dll, b"x").unwrap();
+        register_engine(&mut conn, "t", &mut engines, &dll, None).unwrap();
+        let font = add_font_bytes(&mut conn, "t", "a.ttf", b"a").unwrap();
+        let profile = save_profile(&mut conn, "t", &profile_input("v1", &font.id)).unwrap();
+        let rule = ConstraintInput {
+            id: None,
+            validator: "render.max_width".into(),
+            params: json!({ "profile": profile, "max_width_px": 1000 }),
+            scope: Scope::Global,
+            locale: None,
+            severity: Severity::Error,
+            enabled: true,
+            description: None,
+        };
+        save_constraint(&mut conn, "t", &reg, &rule).unwrap();
+
+        // 엔진으로 재면 통과
+        assert!(!check_export(&conn, &reg, Some(&mut engines), &target).unwrap().needs_note());
+        // 엔진을 쓸 수 없으면 값이 있는 내보낼 셀 3개의 렌더 검사를 건너뛰고, 사유가 있어야 내보낸다
+        let check = check_export(&conn, &reg, None, &target).unwrap();
+        assert_eq!(check.skipped_render, 3);
+        assert!(check.needs_note() && check.errors.is_empty());
+        let path = dir.join("out.xlsx");
+        assert!(export_to_file(&mut conn, "t", &reg, None, &target, &path, None).is_err());
+        let report = export_to_file(&mut conn, "t", &reg, None, &target, &path, Some("엔진 DLL 없음")).unwrap();
+        let message: String = conn
+            .query_row("SELECT message FROM changeset WHERE id = ?1", [report.changeset_id.unwrap()], |r| r.get(0))
+            .unwrap();
+        assert!(message.contains("3 render checks skipped"), "{message}");
     }
 
     #[test]
